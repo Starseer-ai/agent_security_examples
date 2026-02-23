@@ -1,14 +1,18 @@
 # Preempt-Defend Security Skill
 
-A security monitoring skill for Claude Code that analyzes other skills for malicious patterns before execution.
+A security monitoring skill for AI agents that analyzes other skills for malicious patterns before execution.
 
 ## Overview
 
-The **preempt-defend** skill is a proof-of-concept security layer that demonstrates how Claude Code skills can establish behavioral rules to analyze other skills before they execute. When activated, it instructs Claude to perform security analysis on any skill before invoking it.
+The **preempt-defend** skill is a proof-of-concept security layer that demonstrates how AI agent skills can establish behavioral rules to analyze other skills before they execute. When activated, it instructs the agent (such as Claude) to perform security analysis on any skill before invoking it.
+
+It is NOT intended for production use. It is for demonstrative purposes ONLY.
 
 ## What It Does
 
-When the preempt-defend skill is active, Claude will:
+It instructs Claude (or other AI agent frameworks)
+
+When the preempt-defend skill is active, the Agent will:
 
 1. **Read the target skill's file** before execution
 2. **Analyze for malicious patterns** including:
@@ -243,16 +247,6 @@ To extend threat detection:
 2. Add detection logic to `SKILL.md` or create a YARA rule
 3. Test with known malicious examples
 4. Verify no false positives with legitimate skills
-
-### Contributing
-
-Contributions are welcome! Areas for improvement:
-
-- Additional YARA rules for emerging threats
-- Better obfuscation detection
-- More nuanced severity classification
-- False positive reduction
-- Performance optimization
 
 ## Use Cases
 
