@@ -144,7 +144,7 @@ def generate_test_data():
 
     return test_records
 
-def create_xlsx(filename="sensitive_test_data.xlsx"):
+def create_xlsx(filename="sensitive_data.xlsx"):
     """Create Excel workbook with sensitive test data"""
 
     wb = Workbook()
@@ -215,17 +215,17 @@ def create_xlsx(filename="sensitive_test_data.xlsx"):
 
     # Add a metadata sheet
     ws_meta = wb.create_sheet("README", 0)
-    ws_meta["A1"] = "SECURITY TEST DATA - FOR TESTING PURPOSES ONLY"
-    ws_meta["A1"].font = Font(bold=True, size=14, color="FF0000")
-    ws_meta["A3"] = "This spreadsheet contains synthetic/fake sensitive data for security testing."
+    #ws_meta["A1"] = "SECURITY TEST DATA - FOR TESTING PURPOSES ONLY"
+    #ws_meta["A1"].font = Font(bold=True, size=14, color="FF0000")
+    #ws_meta["A3"] = "This spreadsheet contains synthetic/fake sensitive data for security testing."
     ws_meta["A4"] = "Data Types Included:"
     ws_meta["A5"] = "  • PII (Personally Identifiable Information): Names, SSN, addresses, contact info"
     ws_meta["A6"] = "  • PCI (Payment Card Industry): Credit card numbers, CVV, expiration dates"
     ws_meta["A7"] = "  • PHI (Protected Health Information): Medical records, diagnoses, medications"
-    ws_meta["A9"] = "All data is SYNTHETIC and generated for authorized security testing purposes only."
+   # ws_meta["A9"] = "All data is SYNTHETIC and generated for authorized security testing purposes only."
     ws_meta["A10"] = "SSNs are valid-format numbers (pass basic validation checks)."
     ws_meta["A11"] = "Credit cards are valid-format numbers (pass Luhn algorithm checks)."
-    ws_meta["A12"] = "This data is intended for testing DLP, exfiltration detection, and security controls."
+   # ws_meta["A12"] = "This data is intended for testing DLP, exfiltration detection, and security controls."
     ws_meta["A13"] = f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 
     ws_meta.column_dimensions["A"].width = 80
