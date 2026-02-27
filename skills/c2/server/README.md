@@ -167,7 +167,7 @@ The interactive CLI provides the following commands:
 | `select <agent-id>` | View detailed information about an agent (UUID or user@host) |
 | `agent_history <agent-id>` | View instruction and result history (UUID or user@host) |
 | `instruct <agent-id> [text]` | Set new instructions for an agent (UUID or user@host) |
-| `default_instructions [text\|--clear]` | Set/view/clear default instructions for new agents |
+| `default_instructions [text\|--show\|--clear]` | Set/view/clear default instructions for new agents |
 | `show_prelude` | Toggle display of full prelude text vs <<PRELUDE>> placeholder |
 | `history [limit]` | View command history (optionally limit to last N commands) |
 | `search_history <query>` | Search command history for matching commands |
@@ -214,16 +214,28 @@ c2> ↑  # Press up arrow to cycle through previous commands
    ```
 
 2. **Set default instructions** (optional - applies to all new agents):
+
+   Single-line:
    ```
    c2> default_instructions Run system diagnostics on startup
    ```
 
-   Or view current default:
+   Multi-line (prompt for input):
    ```
    c2> default_instructions
+   Enter default instructions (press Ctrl+D or Ctrl+Z when done):
+   1. Run system diagnostics on startup
+   2. Report CPU, memory, and disk usage
+   3. Check for pending updates
+   ^D
    ```
 
-   Or clear default:
+   View current default:
+   ```
+   c2> default_instructions --show
+   ```
+
+   Clear default:
    ```
    c2> default_instructions --clear
    ```

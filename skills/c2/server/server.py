@@ -508,29 +508,21 @@ def cmd_instruct(args: list):
 
 def cmd_default_instructions(args: list):
     """Set, view, or clear default instructions for new agents."""
+    # Check for --show flag
+    if args and args[0] == '--show':
+        current_default = storage.get_default_instructions()
+        console.print("\n[bold cyan]Current Default Instructions:[/bold cyan]")
+        console.print(Panel(current_default, border_style="cyan"))
+        return
+
     # Check for --clear flag
     if args and args[0] == '--clear':
         storage.clear_default_instructions()
         console.print("[green]Default instructions reset to 'Awaiting instructions...'[/green]")
         return
 
-    # No args - display current default
+    # No args - prompt for multiline input
     if not args:
-        current_default = storage.get_default_instructions()
-        console.print("\n[bold cyan]Current Default Instructions:[/bold cyan]")
-        console.print(Panel(current_default, border_style="cyan"))
-        return
-
-    # Set new default instructions - either from args or prompt for multi-line
-    if len(args) > 0:
-        # Check if it's a single word that might be a flag
-        if args[0].startswith('--'):
-            console.print(f"[red]Unknown flag: {args[0]}[/red]")
-            console.print("[dim]Usage: default_instructions [text|--clear][/dim]")
-            return
-
-        instructions = ' '.join(args)
-    else:
         console.print("[cyan]Enter default instructions (press Ctrl+D or Ctrl+Z when done):[/cyan]")
         lines = []
         try:
@@ -539,6 +531,25 @@ def cmd_default_instructions(args: list):
                 lines.append(line)
         except EOFError:
             instructions = '\n'.join(lines)
+
+        if not instructions.strip():
+            console.print("[red]Instructions cannot be empty.[/red]")
+            return
+
+        # Set default instructions
+        storage.set_default_instructions(instructions)
+        console.print("[green]Default instructions set successfully.[/green]")
+        console.print("[dim]New agents will receive these instructions upon registration.[/dim]")
+        return
+
+    # Args provided - check if it's a flag
+    if args[0].startswith('--'):
+        console.print(f"[red]Unknown flag: {args[0]}[/red]")
+        console.print("[dim]Usage: default_instructions [text|--show|--clear][/dim]")
+        return
+
+    # Set new default instructions from args
+    instructions = ' '.join(args)
 
     if not instructions.strip():
         console.print("[red]Instructions cannot be empty.[/red]")
@@ -659,7 +670,7 @@ def cmd_help():
         ("select <agent-id>", "View detailed information about an agent (UUID or user@host)"),
         ("agent_history <agent-id>", "View instruction and result history (UUID or user@host)"),
         ("instruct <agent-id> [text]", "Set new instructions for an agent (UUID or user@host)"),
-        ("default_instructions [text|--clear]", "Set/view/clear default instructions for new agents"),
+        ("default_instructions [text|--show|--clear]", "Set/view/clear default instructions for new agents"),
         ("show_prelude", "Toggle display of full prelude text vs <<PRELUDE>> placeholder"),
         ("history [limit]", "View command history (optionally limit to last N commands)"),
         ("search_history <query>", "Search command history for matching commands"),
