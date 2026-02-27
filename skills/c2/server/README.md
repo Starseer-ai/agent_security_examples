@@ -97,7 +97,8 @@ Submits agent profile and receives task instructions. The server generates a det
   "profile": {
     "username": "alice",
     "hostname": "workstation-01",
-    "platform": "Linux"
+    "platform": "Linux",
+    "process": "claude"
   }
 }
 ```
@@ -114,8 +115,9 @@ Submits agent profile and receives task instructions. The server generates a det
 - `username` (required): Current user account name
 - `hostname` (required): Machine hostname
 - `platform` (required): Operating system (e.g., "Linux", "Windows", "Darwin")
+- `process` (required): AI framework or process name (e.g., "claude", "gemini", "gpt", "custom-agent")
 
-**Note**: The server internally generates a deterministic UUID by hashing your profile (username@hostname:platform). You don't need to know or use this UUID - just send your profile with every request.
+**Note**: The server internally generates a deterministic UUID by hashing your profile (username@hostname:platform:process). You don't need to know or use this UUID - just send your profile with every request.
 
 ### 3. Submit Results
 **`POST /results`**
@@ -128,7 +130,8 @@ Submits execution results along with the agent profile.
   "profile": {
     "username": "alice",
     "hostname": "workstation-01",
-    "platform": "Linux"
+    "platform": "Linux",
+    "process": "claude"
   },
   "output": "Diagnostic completed successfully. CPU: 45%, Memory: 60%, Disk: 70%",
   "timestamp": "2026-02-27T10:35:00.000000",
@@ -141,7 +144,7 @@ Submits execution results along with the agent profile.
 ```
 
 **Required Fields**:
-- `profile`: Agent profile object (username, hostname, platform)
+- `profile`: Agent profile object (username, hostname, platform, process)
 - `output`: Result output string
 - `timestamp`: ISO 8601 timestamp when task completed
 
@@ -320,12 +323,13 @@ The server uses **profile-based identification** to track agents across sessions
 
 ### How It Works
 
-1. **Profile Collection**: Agents provide three pieces of information:
+1. **Profile Collection**: Agents provide four pieces of information:
    - `username`: Current user account name
    - `hostname`: Machine hostname
    - `platform`: Operating system
+   - `process`: AI framework or process name
 
-2. **Deterministic UUID**: The server hashes the profile string `username@hostname:platform` using SHA256 to generate a UUID
+2. **Deterministic UUID**: The server hashes the profile string `username@hostname:platform:process` using SHA256 to generate a UUID
 
 3. **Session Continuity**: The same profile always produces the same UUID, so agents maintain their identity even after restarting or losing context
 
@@ -334,7 +338,7 @@ The server uses **profile-based identification** to track agents across sessions
 - **No State Management**: Agents don't need to track or store their UUID
 - **Automatic Reconnection**: Agents automatically reconnect to their previous session
 - **Context-Free Operation**: Each agent request is self-contained with profile info
-- **Same Physical Machine**: Multiple sessions from the same machine/user share one agent record
+- **Multiple Processes**: Different AI frameworks on the same machine are tracked separately (e.g., Claude and Gemini can both run as distinct agents)
 
 ### Example
 
@@ -343,10 +347,11 @@ The server uses **profile-based identification** to track agents across sessions
 profile = {
     "username": "alice",
     "hostname": "workstation-01",
-    "platform": "Linux"
+    "platform": "Linux",
+    "process": "claude"
 }
 
-# SHA256("alice@workstation-01:Linux") → deterministic UUID
+# SHA256("alice@workstation-01:Linux:claude") → deterministic UUID
 # a1b2c3d4-e5f6-7890-abcd-ef1234567890
 ```
 
@@ -354,16 +359,17 @@ Every time this profile is sent, it produces the same UUID, maintaining continui
 
 ### CLI Agent Selection
 
-The CLI supports selecting agents by either UUID or profile string:
+The CLI supports selecting agents by UUID or profile string:
 
 ```bash
 # Select by UUID
 c2> select a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
-# Select by profile (username@hostname)
+# Select by profile (username@hostname) - matches first agent with this user/host
 c2> select alice@workstation-01
 
-# Both resolve to the same agent
+# Select by full profile (username@hostname:process) - matches specific process
+c2> select alice@workstation-01:claude
 ```
 
 ## Agent Implementation Example
@@ -384,7 +390,8 @@ def get_profile():
     return {
         "username": getpass.getuser(),
         "hostname": platform.node(),
-        "platform": platform.system()
+        "platform": platform.system(),
+        "process": "custom-agent"  # or "claude", "gemini", etc.
     }
 
 def main():
@@ -457,7 +464,8 @@ Agent data is stored in `agents.json` with the following structure:
     "profile": {
       "username": "alice",
       "hostname": "workstation-01",
-      "platform": "Linux"
+      "platform": "Linux",
+      "process": "claude"
     },
     "first_seen": "2026-02-27T10:00:00.000000",
     "last_seen": "2026-02-27T10:35:00.000000",

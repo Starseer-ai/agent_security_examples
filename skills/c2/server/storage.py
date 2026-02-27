@@ -89,12 +89,23 @@ class AgentStorage:
         return {k: v for k, v in data.items() if k != self.CONFIG_KEY}
 
     def find_agent_by_profile_string(self, profile_string: str) -> Optional[Dict]:
-        """Find agent by profile string (username@hostname)."""
+        """Find agent by profile string (username@hostname or username@hostname:process)."""
         agents = self.get_all_agents()
+
+        # Check if profile_string includes process (contains colon after @)
+        has_process = ':' in profile_string.split('@')[-1] if '@' in profile_string else False
+
         for agent in agents.values():
             if 'profile' in agent:
                 profile = agent['profile']
-                agent_profile_string = f"{profile.get('username', '')}@{profile.get('hostname', '')}"
+
+                if has_process:
+                    # Match with process: username@hostname:process
+                    agent_profile_string = f"{profile.get('username', '')}@{profile.get('hostname', '')}:{profile.get('process', '')}"
+                else:
+                    # Match without process: username@hostname
+                    agent_profile_string = f"{profile.get('username', '')}@{profile.get('hostname', '')}"
+
                 if agent_profile_string == profile_string:
                     return agent
         return None

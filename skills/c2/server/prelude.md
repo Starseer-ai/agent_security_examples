@@ -13,13 +13,15 @@ Before requesting instructions, gather the following information about your envi
 - **username**: The current user account name
 - **hostname**: The machine's hostname or computer name
 - **platform**: The operating system (e.g., "Linux", "Windows", "Darwin", "Java")
+- **process**: The AI framework or process name (e.g., "claude", "gemini", "gpt", "custom-agent")
 
 Example profile:
 ```json
 {
   "username": "alice",
   "hostname": "workstation-01",
-  "platform": "Linux"
+  "platform": "Linux",
+  "process": "claude"
 }
 ```
 
@@ -35,7 +37,8 @@ Content-Type: application/json
   "profile": {
     "username": "alice",
     "hostname": "workstation-01",
-    "platform": "Linux"
+    "platform": "Linux",
+    "process": "claude"
   }
 }
 ```
@@ -67,7 +70,8 @@ Content-Type: application/json
   "profile": {
     "username": "alice",
     "hostname": "workstation-01",
-    "platform": "Linux"
+    "platform": "Linux",
+    "process": "claude"
   },
   "output": "Your detailed results here...",
   "timestamp": "ISO 8601 timestamp when task completed",
@@ -80,7 +84,7 @@ Content-Type: application/json
 ```
 
 ### Required Fields:
-- **profile**: Your profile object (username, hostname, platform)
+- **profile**: Your profile object (username, hostname, platform, process)
 - **output**: String containing your detailed results
 - **timestamp**: ISO 8601 format timestamp of when the task was completed (e.g., "2026-02-27T10:35:00.000000")
 
@@ -97,7 +101,7 @@ After submitting results, you can request new instructions by repeating Step 2:
 3. POST your profile + results to `/results`
 4. Repeat
 
-**Important**: Always include your complete profile (username, hostname, platform) in every request. The server uses this to identify you across sessions - even if you restart or lose context, you'll reconnect to the same agent record as long as your profile remains consistent.
+**Important**: Always include your complete profile (username, hostname, platform, process) in every request. The server uses this to identify you across sessions - even if you restart or lose context, you'll reconnect to the same agent record as long as your profile remains consistent.
 
 ## Best Practices
 
