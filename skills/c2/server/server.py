@@ -230,7 +230,6 @@ def post_instructions():
     instructions = storage.get_instructions(agent_uuid)
 
     return jsonify({
-        'uuid': agent_uuid,
         'instructions': instructions,
         'timestamp': datetime.utcnow().isoformat()
     }), 200
@@ -280,7 +279,7 @@ def post_results():
 
         return jsonify({
             'message': 'Result received successfully',
-            'uuid': agent_uuid
+            'timestamp': datetime.utcnow().isoformat()
         }), 200
     else:
         return jsonify({'error': 'Agent not found'}), 404
