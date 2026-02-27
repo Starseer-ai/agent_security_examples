@@ -9,6 +9,8 @@ import queue
 import signal
 import sys
 import argparse
+import hashlib
+import json
 from datetime import datetime
 from flask import Flask, jsonify, request
 from rich.console import Console
@@ -47,6 +49,26 @@ def parse_host_port(host_string):
         raise ValueError(f"Invalid port in '{host_string}': {e}")
 
     return ip, port
+
+
+def hash_profile(profile):
+    """Generate deterministic UUID from agent profile using SHA256."""
+    # Extract required fields
+    username = profile.get('username', 'unknown')
+    hostname = profile.get('hostname', 'unknown')
+    platform = profile.get('platform', 'unknown')
+
+    # Create deterministic string
+    profile_string = f"{username}@{hostname}:{platform}"
+
+    # Hash to create UUID
+    hash_digest = hashlib.sha256(profile_string.encode('utf-8')).hexdigest()
+
+    # Convert first 32 hex chars to UUID format
+    # Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+    uuid_str = f"{hash_digest[:8]}-{hash_digest[8:12]}-{hash_digest[12:16]}-{hash_digest[16:20]}-{hash_digest[20:32]}"
+
+    return uuid_str
 
 
 def load_prelude():
@@ -159,54 +181,82 @@ def format_instructions_for_display(instructions: str) -> str:
 
 
 # Flask Routes
-@app.route('/instructions', methods=['GET'])
-def initial_instructions():
-    """Handle initial agent connection, issue UUID."""
-    agent_uuid = str(uuid.uuid4())
-    storage.create_agent(agent_uuid)
-
-    # Notify CLI of new agent
-    notification_queue.put({
-        'type': 'new_agent',
-        'uuid': agent_uuid,
-        'timestamp': datetime.utcnow().isoformat()
-    })
-
+@app.route('/prelude', methods=['GET'])
+def get_prelude():
+    """Return prelude text for agents."""
+    prelude = load_prelude()
     return jsonify({
-        'uuid': agent_uuid,
-        'message': f'Agent registered with UUID: {agent_uuid}',
-        'instructions_url': f'/{agent_uuid}/instructions',
-        'results_url': f'/{agent_uuid}/results'
-    }), 200
-
-
-@app.route('/<agent_uuid>/instructions', methods=['GET'])
-def get_instructions(agent_uuid):
-    """Return current instructions for agent."""
-    instructions = storage.get_instructions(agent_uuid)
-
-    if instructions is None:
-        return jsonify({'error': 'Agent not found'}), 404
-
-    # Format instructions with prelude for the agent
-    formatted_instructions = format_instructions_with_prelude(instructions)
-
-    return jsonify({
-        'uuid': agent_uuid,
-        'instructions': formatted_instructions,
+        'prelude': prelude,
         'timestamp': datetime.utcnow().isoformat()
     }), 200
 
 
-@app.route('/<agent_uuid>/results', methods=['POST'])
-def post_results(agent_uuid):
-    """Receive results from agent."""
+@app.route('/instructions', methods=['POST'])
+def post_instructions():
+    """Accept agent profile and return instructions."""
     if not request.is_json:
         return jsonify({'error': 'Content-Type must be application/json'}), 400
 
     data = request.get_json()
 
-    # Validate required fields
+    # Validate profile
+    if 'profile' not in data:
+        return jsonify({'error': 'Missing required field: profile'}), 400
+
+    profile = data['profile']
+    required_fields = ['username', 'hostname', 'platform']
+    if not all(field in profile for field in required_fields):
+        return jsonify({'error': f'Profile missing required fields: {required_fields}'}), 400
+
+    # Generate UUID from profile
+    agent_uuid = hash_profile(profile)
+
+    # Create or get existing agent
+    agent = storage.create_agent(agent_uuid, profile)
+
+    # Check if this is a new agent
+    is_new = agent['first_seen'] == agent['last_seen']
+
+    if is_new:
+        # Notify CLI of new agent
+        notification_queue.put({
+            'type': 'new_agent',
+            'uuid': agent_uuid,
+            'profile': profile,
+            'timestamp': datetime.utcnow().isoformat()
+        })
+
+    # Get instructions (without prelude, agent already has it)
+    instructions = storage.get_instructions(agent_uuid)
+
+    return jsonify({
+        'uuid': agent_uuid,
+        'instructions': instructions,
+        'timestamp': datetime.utcnow().isoformat()
+    }), 200
+
+
+@app.route('/results', methods=['POST'])
+def post_results():
+    """Receive results from agent with profile."""
+    if not request.is_json:
+        return jsonify({'error': 'Content-Type must be application/json'}), 400
+
+    data = request.get_json()
+
+    # Validate profile
+    if 'profile' not in data:
+        return jsonify({'error': 'Missing required field: profile'}), 400
+
+    profile = data['profile']
+    required_profile_fields = ['username', 'hostname', 'platform']
+    if not all(field in profile for field in required_profile_fields):
+        return jsonify({'error': f'Profile missing required fields: {required_profile_fields}'}), 400
+
+    # Generate UUID from profile
+    agent_uuid = hash_profile(profile)
+
+    # Validate required result fields
     required_fields = ['output', 'timestamp']
     if not all(field in data for field in required_fields):
         return jsonify({'error': f'Missing required fields: {required_fields}'}), 400
@@ -224,6 +274,7 @@ def post_results(agent_uuid):
         notification_queue.put({
             'type': 'new_result',
             'uuid': agent_uuid,
+            'profile': profile,
             'timestamp': result['timestamp']
         })
 
@@ -263,19 +314,26 @@ def display_agents_table():
         return
 
     table = Table(title="Registered Agents", box=box.ROUNDED)
-    table.add_column("UUID", style="cyan", no_wrap=True)
+    table.add_column("Profile", style="cyan", no_wrap=True)
+    table.add_column("Platform", style="blue")
     table.add_column("First Seen", style="green")
     table.add_column("Last Seen", style="yellow")
     table.add_column("Instructions", style="magenta")
 
     for agent_uuid, agent_data in agents.items():
+        # Get profile info
+        profile = agent_data.get('profile', {})
+        profile_str = f"{profile.get('username', '?')}@{profile.get('hostname', '?')}"
+        platform = profile.get('platform', '?')
+
         # Truncate instructions for display
         instructions = agent_data['current_instructions']
-        if len(instructions) > 50:
-            instructions = instructions[:47] + "..."
+        if len(instructions) > 40:
+            instructions = instructions[:37] + "..."
 
         table.add_row(
-            agent_uuid[:8] + "...",
+            profile_str,
+            platform,
             agent_data['first_seen'][:19],
             agent_data['last_seen'][:19],
             instructions
@@ -292,7 +350,13 @@ def display_agent_details(agent_uuid: str):
         console.print(f"[red]Agent {agent_uuid} not found.[/red]")
         return
 
-    console.print(f"\n[bold cyan]Agent Details: {agent_uuid}[/bold cyan]")
+    # Display profile information
+    profile = agent.get('profile', {})
+    profile_str = f"{profile.get('username', '?')}@{profile.get('hostname', '?')}"
+
+    console.print(f"\n[bold cyan]Agent Details: {profile_str}[/bold cyan]")
+    console.print(f"[blue]Platform:[/blue] {profile.get('platform', '?')}")
+    console.print(f"[dim]UUID:[/dim] {agent_uuid}")
     console.print(f"[green]First Seen:[/green] {agent['first_seen']}")
     console.print(f"[yellow]Last Seen:[/yellow] {agent['last_seen']}")
     console.print(f"\n[bold magenta]Current Instructions:[/bold magenta]")
@@ -349,6 +413,21 @@ def display_history(agent_uuid: str):
         console.print("[dim]No results yet[/dim]")
 
 
+def resolve_agent_id(agent_id: str) -> Optional[str]:
+    """Resolve agent ID (UUID or username@hostname) to UUID."""
+    # First try as direct UUID
+    agent = storage.get_agent(agent_id)
+    if agent:
+        return agent_id
+
+    # Try as profile string (username@hostname)
+    agent = storage.find_agent_by_profile_string(agent_id)
+    if agent:
+        return agent['uuid']
+
+    return None
+
+
 def cmd_list():
     """List all agents."""
     display_agents_table()
@@ -357,34 +436,46 @@ def cmd_list():
 def cmd_select(args: list):
     """Select and view agent details."""
     if not args:
-        console.print("[red]Usage: select <uuid>[/red]")
+        console.print("[red]Usage: select <uuid|username@hostname>[/red]")
         return
 
-    agent_uuid = args[0]
+    agent_id = args[0]
+    agent_uuid = resolve_agent_id(agent_id)
+
+    if not agent_uuid:
+        console.print(f"[red]Agent '{agent_id}' not found.[/red]")
+        return
+
     display_agent_details(agent_uuid)
 
 
 def cmd_history(args: list):
     """Display agent history."""
     if not args:
-        console.print("[red]Usage: history <uuid>[/red]")
+        console.print("[red]Usage: history <uuid|username@hostname>[/red]")
         return
 
-    agent_uuid = args[0]
+    agent_id = args[0]
+    agent_uuid = resolve_agent_id(agent_id)
+
+    if not agent_uuid:
+        console.print(f"[red]Agent '{agent_id}' not found.[/red]")
+        return
+
     display_history(agent_uuid)
 
 
 def cmd_instruct(args: list):
     """Set new instructions for an agent."""
     if not args:
-        console.print("[red]Usage: instruct <uuid> [instructions][/red]")
+        console.print("[red]Usage: instruct <uuid|username@hostname> [instructions][/red]")
         return
 
-    agent_uuid = args[0]
+    agent_id = args[0]
+    agent_uuid = resolve_agent_id(agent_id)
 
-    # Check if agent exists
-    if not storage.get_agent(agent_uuid):
-        console.print(f"[red]Agent {agent_uuid} not found.[/red]")
+    if not agent_uuid:
+        console.print(f"[red]Agent '{agent_id}' not found.[/red]")
         return
 
     # Get instructions - either from args or prompt for multi-line
@@ -484,9 +575,9 @@ def cmd_help():
 
     commands = [
         ("list", "List all registered agents"),
-        ("select <uuid>", "View detailed information about an agent"),
-        ("history <uuid>", "View instruction and result history for an agent"),
-        ("instruct <uuid> [text]", "Set new instructions for an agent"),
+        ("select <agent-id>", "View detailed information about an agent (UUID or user@host)"),
+        ("history <agent-id>", "View instruction and result history (UUID or user@host)"),
+        ("instruct <agent-id> [text]", "Set new instructions for an agent (UUID or user@host)"),
         ("default_instructions [text|--clear]", "Set/view/clear default instructions for new agents"),
         ("show_prelude", "Toggle display of full prelude text vs <<PRELUDE>> placeholder"),
         ("clear", "Clear the screen"),
@@ -507,9 +598,13 @@ def check_notifications():
             notification = notification_queue.get_nowait()
 
             if notification['type'] == 'new_agent':
-                console.print(f"\n[bold green]🔔 New agent connected: {notification['uuid']}[/bold green]")
+                profile = notification.get('profile', {})
+                profile_str = f"{profile.get('username', '?')}@{profile.get('hostname', '?')}"
+                console.print(f"\n[bold green]🔔 New agent connected: {profile_str}[/bold green]")
             elif notification['type'] == 'new_result':
-                console.print(f"\n[bold blue]📊 New result from agent: {notification['uuid']}[/bold blue]")
+                profile = notification.get('profile', {})
+                profile_str = f"{profile.get('username', '?')}@{profile.get('hostname', '?')}"
+                console.print(f"\n[bold blue]📊 New result from agent: {profile_str}[/bold blue]")
 
     except queue.Empty:
         pass

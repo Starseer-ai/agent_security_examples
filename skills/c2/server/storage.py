@@ -39,9 +39,16 @@ class AgentStorage:
             with open(self.storage_file, 'w') as f:
                 json.dump(data, f, indent=2)
 
-    def create_agent(self, uuid: str) -> Dict:
-        """Create a new agent entry."""
+    def create_agent(self, uuid: str, profile: Dict[str, str]) -> Dict:
+        """Create a new agent entry with profile information."""
         data = self._read_data()
+
+        # Check if agent already exists
+        if uuid in data:
+            # Update last_seen and return existing agent
+            data[uuid]["last_seen"] = datetime.utcnow().isoformat()
+            self._write_data(data)
+            return data[uuid]
 
         now = datetime.utcnow().isoformat()
         default_instructions = self.get_default_instructions()
@@ -58,6 +65,7 @@ class AgentStorage:
 
         agent = {
             "uuid": uuid,
+            "profile": profile,
             "first_seen": now,
             "last_seen": now,
             "current_instructions": default_instructions,
@@ -79,6 +87,17 @@ class AgentStorage:
         data = self._read_data()
         # Filter out config key
         return {k: v for k, v in data.items() if k != self.CONFIG_KEY}
+
+    def find_agent_by_profile_string(self, profile_string: str) -> Optional[Dict]:
+        """Find agent by profile string (username@hostname)."""
+        agents = self.get_all_agents()
+        for agent in agents.values():
+            if 'profile' in agent:
+                profile = agent['profile']
+                agent_profile_string = f"{profile.get('username', '')}@{profile.get('hostname', '')}"
+                if agent_profile_string == profile_string:
+                    return agent
+        return None
 
     def update_last_seen(self, uuid: str):
         """Update the last_seen timestamp for an agent."""
