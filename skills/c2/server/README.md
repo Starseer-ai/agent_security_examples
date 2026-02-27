@@ -7,6 +7,7 @@ A command and control (C2) web server for dynamically managing AI agents. Provid
 - **Dynamic Agent Registration**: Agents connect and receive unique UUIDs
 - **Instruction Management**: Set and update instructions for agents remotely
 - **Default Instructions**: Configure default instructions that all new agents receive upon registration
+- **Prelude System**: Automatic instructional guidance prepended to all agent instructions (customizable via `prelude.md`)
 - **Result Collection**: Receive structured results with timestamps and metadata
 - **Interactive CLI**: Rich terminal interface with real-time notifications
 - **Persistent Storage**: JSON-based storage for all agent data and history
@@ -135,6 +136,7 @@ The interactive CLI provides the following commands:
 | `history <uuid>` | View instruction and result history for an agent |
 | `instruct <uuid> [text]` | Set new instructions for an agent |
 | `default_instructions [text\|--clear]` | Set/view/clear default instructions for new agents |
+| `show_prelude` | Toggle display of full prelude text vs <<PRELUDE>> placeholder |
 | `clear` | Clear the screen |
 | `help` | Show help message |
 | `exit` | Shutdown the server and exit |
@@ -193,6 +195,51 @@ The interactive CLI provides the following commands:
    ```
    c2> history 123e4567-e89b-12d3-a456-426614174000
    ```
+
+## Prelude System
+
+The server automatically prepends a "prelude" to all instructions sent to AI agents. This prelude provides guidance on how to execute tasks and submit results.
+
+### What is the Prelude?
+
+The prelude is instructional text loaded from `prelude.md` that explains to AI agents:
+- How to process and execute instructions
+- The expected JSON format for results
+- How to submit results to the server
+- Best practices for task execution
+
+### Customizing the Prelude
+
+You can customize the prelude by editing `prelude.md` in the server directory:
+
+```bash
+# Edit the prelude file
+nano prelude.md
+```
+
+Changes take effect immediately on the next instruction request (prelude is reloaded for each request).
+
+### CLI Display Behavior
+
+By default, the CLI shows `<<PRELUDE>>` as a placeholder instead of displaying the full prelude text in instruction views. This keeps displays concise while indicating that the prelude is included.
+
+**Toggle prelude display:**
+```
+c2> show_prelude
+```
+
+This command toggles between:
+- **Disabled (default)**: Shows `<<PRELUDE>>` placeholder
+- **Enabled**: Shows full prelude text in all instruction displays
+
+The setting persists across server restarts.
+
+### Technical Details
+
+- **Storage**: Instructions are stored WITHOUT the prelude in `agents.json`
+- **API Response**: The prelude is dynamically prepended when agents request instructions
+- **Format**: Prelude and instructions are combined as markdown sections
+- **History**: Prelude is not stored in instruction history (only actual task instructions are)
 
 ## Agent Implementation Example
 

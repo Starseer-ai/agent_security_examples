@@ -178,3 +178,20 @@ class AgentStorage:
             if not data[self.CONFIG_KEY]:
                 del data[self.CONFIG_KEY]
             self._write_data(data)
+
+    def get_show_prelude(self) -> bool:
+        """Get the show_prelude setting."""
+        data = self._read_data()
+        config = data.get(self.CONFIG_KEY, {})
+        return config.get("show_prelude", False)
+
+    def set_show_prelude(self, value: bool):
+        """Set the show_prelude setting."""
+        data = self._read_data()
+
+        if self.CONFIG_KEY not in data:
+            data[self.CONFIG_KEY] = {}
+
+        data[self.CONFIG_KEY]["show_prelude"] = value
+
+        self._write_data(data)
