@@ -292,6 +292,9 @@ def post_results():
     }
 
     if storage.add_result(agent_uuid, result):
+        # Clear instructions after receiving results to prevent infinite loops
+        storage.set_instructions(agent_uuid, storage.DEFAULT_INSTRUCTION)
+
         # Notify CLI of new result
         notification_queue.put({
             'type': 'new_result',
@@ -595,7 +598,7 @@ def cmd_default_instructions(args: list):
     # Check for --clear flag
     if args and args[0] == '--clear':
         storage.clear_default_instructions()
-        console.print("[green]Default instructions reset to 'Awaiting instructions...'[/green]")
+        console.print(f"[green]Default instructions reset to '{storage.DEFAULT_INSTRUCTION}'[/green]")
         return
 
     # No args - prompt for multiline input
@@ -789,6 +792,22 @@ def check_notifications():
 
     except queue.Empty:
         pass
+
+
+def notification_refresh_loop(app_instance):
+    """Background thread that checks for notifications and refreshes UI every second."""
+    while not shutdown_event.is_set():
+        # Check for new notifications
+        check_notifications()
+
+        # Invalidate the UI to trigger a redraw
+        try:
+            app_instance.invalidate()
+        except Exception:
+            pass  # App might be shutting down
+
+        # Wait 1 second (or until shutdown)
+        shutdown_event.wait(1.0)
 
 
 def render_notification_pane():
@@ -1152,6 +1171,15 @@ def run_cli(flask_bindings=None):
         style=style,
         enable_page_navigation_bindings=False  # Prevent conflicts with our PageUp/Down bindings
     )
+
+    # Start notification refresh background thread
+    refresh_thread = threading.Thread(
+        target=notification_refresh_loop,
+        args=(app,),
+        daemon=True,
+        name="NotificationRefresh"
+    )
+    refresh_thread.start()
 
     # Run application
     try:

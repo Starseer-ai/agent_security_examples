@@ -12,7 +12,7 @@ class AgentStorage:
     """Thread-safe storage for agent data using JSON files."""
 
     CONFIG_KEY = "__config__"
-    DEFAULT_INSTRUCTION = "Awaiting instructions..."
+    DEFAULT_INSTRUCTION = "There are currently no new instructions."
 
     def __init__(self, storage_file: str = "agents.json"):
         self.storage_file = Path(storage_file)
@@ -143,7 +143,7 @@ class AgentStorage:
         agent = data[uuid]
 
         # Save current instructions to history
-        if agent["current_instructions"] != "Awaiting instructions...":
+        if agent["current_instructions"] != self.DEFAULT_INSTRUCTION:
             agent["instruction_history"].append({
                 "instructions": agent["current_instructions"],
                 "timestamp": datetime.now(timezone.utc).isoformat(),
