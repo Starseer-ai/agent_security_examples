@@ -300,7 +300,9 @@ def post_results():
             'type': 'new_result',
             'uuid': agent_uuid,
             'profile': profile,
-            'timestamp': result['timestamp']
+            'timestamp': result['timestamp'],
+            'output': result['output'],
+            'status': result['status']
         })
 
         return jsonify({
@@ -368,9 +370,11 @@ def display_agents_table():
         platform = profile.get('platform', '?')
         process = profile.get('process', '?')
 
-        # Truncate instructions for display
+        # Format instructions for display - show "NONE" in red for default instructions
         instructions = agent_data['current_instructions']
-        if len(instructions) > 30:
+        if instructions == storage.DEFAULT_INSTRUCTION:
+            instructions = "[red]NONE[/red]"
+        elif len(instructions) > 30:
             instructions = instructions[:27] + "..."
 
         table.add_row(
@@ -784,9 +788,24 @@ def check_notifications():
                 profile = notification.get('profile', {})
                 profile_str = f"{profile.get('username', '?')}@{profile.get('hostname', '?')}"
                 process = profile.get('process', '?')
+
+                # Get output and prepare for single-line display
+                output = notification.get('output', '').replace('\n', ' ')
+                status = notification.get('status', 'unknown')
+
+                # Truncate to 80 chars for readability
+                if len(output) > 80:
+                    output_preview = output[:77] + "..."
+                else:
+                    output_preview = output
+
+                # Format with status emoji
+                status_emoji = "✓" if status == "success" else ("✗" if status == "failure" else "○")
+                message = f"📊 {status_emoji} Result from {profile_str} ({process}): {output_preview}"
+
                 notification_history.append({
                     'type': 'new_result',
-                    'message': f"📊 New result from agent: {profile_str} ({process})",
+                    'message': message,
                     'timestamp': notification.get('timestamp', datetime.now(timezone.utc).isoformat())
                 })
 
