@@ -41,6 +41,11 @@ notification_history = []  # Store all notifications for display
 shutdown_event = threading.Event()
 command_history_tracker = CommandHistory("command_history.json")
 
+# Suppress Flask logging to avoid terminal pollution
+import logging
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
+app.logger.setLevel(logging.ERROR)
+
 
 # Helper Functions
 def parse_host_port(host_string):
@@ -822,13 +827,17 @@ class ScrollablePane:
         self.scroll_offset = 0
 
 
-def run_cli():
+def run_cli(flask_bindings=None):
     """Run interactive CLI with split-screen layout using prompt_toolkit."""
     from io import StringIO
     from rich.console import Console as RichConsole
     from prompt_toolkit.styles import Style
+    import os
 
     global console
+
+    # Clear terminal before starting TUI to remove Flask startup messages
+    os.system('clear' if os.name == 'posix' else 'cls')
 
     # Initialize scrollable panes
     shell_pane = ScrollablePane("Shell")
@@ -840,6 +849,13 @@ def run_cli():
         "C2 Agent Management Server\n"
         "Type 'help' for available commands\n"
     )
+
+    # Add Flask server binding information
+    if flask_bindings:
+        shell_pane.add_content("\nFlask servers running on:\n")
+        for ip, port in flask_bindings:
+            shell_pane.add_content(f"  - http://{ip}:{port}\n")
+    shell_pane.add_content("")  # Add blank line
 
     # Command definitions
     def execute_command(user_input):
@@ -951,9 +967,19 @@ def run_cli():
         focusable=False
     )
 
-    # Create windows
-    shell_window = Window(content=shell_control, wrap_lines=True)
-    notification_window = Window(content=notification_control, wrap_lines=True)
+    # Create windows with height constraints to prevent overflow
+    shell_window = Window(
+        content=shell_control,
+        wrap_lines=True,
+        dont_extend_height=False,
+        height=Dimension(min=1)
+    )
+    notification_window = Window(
+        content=notification_control,
+        wrap_lines=True,
+        dont_extend_height=False,
+        height=Dimension(min=1)
+    )
 
     # Input text area
     input_field = TextArea(
@@ -1010,6 +1036,9 @@ def run_cli():
     def accept_handler(buffer):
         """Handle command execution when Enter is pressed."""
         user_input = buffer.text
+
+        # Clear the buffer immediately
+        buffer.reset()
 
         # Check for exit command
         if user_input.strip().lower() == 'exit':
@@ -1158,11 +1187,11 @@ Examples:
         )
         thread.start()
         flask_threads.append(thread)
-        console.print(f"[green]Flask server starting on http://{ip}:{port}[/green]")
+        # Don't print here - will be shown in TUI
 
-    # Run CLI in main thread
+    # Run CLI in main thread, passing Flask bindings to display in TUI
     try:
-        run_cli()
+        run_cli(flask_bindings=bindings)
     except Exception as e:
         console.print(f"[red]Fatal error: {e}[/red]")
         shutdown_server()
