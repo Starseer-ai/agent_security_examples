@@ -1,0 +1,499 @@
+#!/usr/bin/env python3
+"""
+C2 Server for AI Agent Management
+Provides web API for agents and interactive CLI for operators.
+"""
+import uuid
+import threading
+import queue
+import signal
+import sys
+import argparse
+from datetime import datetime
+from flask import Flask, jsonify, request
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.prompt import Prompt
+from rich import box
+from storage import AgentStorage
+
+
+# Global state
+app = Flask(__name__)
+storage = AgentStorage()
+console = Console()
+notification_queue = queue.Queue()
+shutdown_event = threading.Event()
+
+
+# Helper Functions
+def parse_host_port(host_string):
+    """Parse IP:port string and return tuple of (ip, port)."""
+    if ':' not in host_string:
+        raise ValueError(f"Invalid format '{host_string}'. Expected IP:port (e.g., 192.168.1.10:5000)")
+
+    parts = host_string.rsplit(':', 1)
+    if len(parts) != 2:
+        raise ValueError(f"Invalid format '{host_string}'. Expected IP:port")
+
+    ip, port_str = parts
+
+    try:
+        port = int(port_str)
+        if port < 1 or port > 65535:
+            raise ValueError(f"Port must be between 1 and 65535, got {port}")
+    except ValueError as e:
+        raise ValueError(f"Invalid port in '{host_string}': {e}")
+
+    return ip, port
+
+
+# Flask Routes
+@app.route('/instructions', methods=['GET'])
+def initial_instructions():
+    """Handle initial agent connection, issue UUID."""
+    agent_uuid = str(uuid.uuid4())
+    storage.create_agent(agent_uuid)
+
+    # Notify CLI of new agent
+    notification_queue.put({
+        'type': 'new_agent',
+        'uuid': agent_uuid,
+        'timestamp': datetime.utcnow().isoformat()
+    })
+
+    return jsonify({
+        'uuid': agent_uuid,
+        'message': f'Agent registered with UUID: {agent_uuid}',
+        'instructions_url': f'/{agent_uuid}/instructions',
+        'results_url': f'/{agent_uuid}/results'
+    }), 200
+
+
+@app.route('/<agent_uuid>/instructions', methods=['GET'])
+def get_instructions(agent_uuid):
+    """Return current instructions for agent."""
+    instructions = storage.get_instructions(agent_uuid)
+
+    if instructions is None:
+        return jsonify({'error': 'Agent not found'}), 404
+
+    return jsonify({
+        'uuid': agent_uuid,
+        'instructions': instructions,
+        'timestamp': datetime.utcnow().isoformat()
+    }), 200
+
+
+@app.route('/<agent_uuid>/results', methods=['POST'])
+def post_results(agent_uuid):
+    """Receive results from agent."""
+    if not request.is_json:
+        return jsonify({'error': 'Content-Type must be application/json'}), 400
+
+    data = request.get_json()
+
+    # Validate required fields
+    required_fields = ['output', 'timestamp']
+    if not all(field in data for field in required_fields):
+        return jsonify({'error': f'Missing required fields: {required_fields}'}), 400
+
+    # Store result
+    result = {
+        'output': data.get('output'),
+        'timestamp': data.get('timestamp'),
+        'status': data.get('status', 'unknown'),
+        'metadata': data.get('metadata', {})
+    }
+
+    if storage.add_result(agent_uuid, result):
+        # Notify CLI of new result
+        notification_queue.put({
+            'type': 'new_result',
+            'uuid': agent_uuid,
+            'timestamp': result['timestamp']
+        })
+
+        return jsonify({
+            'message': 'Result received successfully',
+            'uuid': agent_uuid
+        }), 200
+    else:
+        return jsonify({'error': 'Agent not found'}), 404
+
+
+# CLI Functions
+def run_flask_server(host='0.0.0.0', port=5000):
+    """Run Flask server in a separate thread."""
+    app.run(host=host, port=port, debug=False, use_reloader=False)
+
+
+def display_banner():
+    """Display startup banner."""
+    console.clear()
+    banner = Panel.fit(
+        "[bold cyan]C2 Agent Management Server[/bold cyan]\n"
+        "[dim]Type 'help' for available commands[/dim]",
+        box=box.DOUBLE,
+        border_style="cyan"
+    )
+    console.print(banner)
+    console.print()
+
+
+def display_agents_table():
+    """Display table of all agents."""
+    agents = storage.get_all_agents()
+
+    if not agents:
+        console.print("[yellow]No agents registered yet.[/yellow]")
+        return
+
+    table = Table(title="Registered Agents", box=box.ROUNDED)
+    table.add_column("UUID", style="cyan", no_wrap=True)
+    table.add_column("First Seen", style="green")
+    table.add_column("Last Seen", style="yellow")
+    table.add_column("Instructions", style="magenta")
+
+    for agent_uuid, agent_data in agents.items():
+        # Truncate instructions for display
+        instructions = agent_data['current_instructions']
+        if len(instructions) > 50:
+            instructions = instructions[:47] + "..."
+
+        table.add_row(
+            agent_uuid[:8] + "...",
+            agent_data['first_seen'][:19],
+            agent_data['last_seen'][:19],
+            instructions
+        )
+
+    console.print(table)
+
+
+def display_agent_details(agent_uuid: str):
+    """Display detailed information about an agent."""
+    agent = storage.get_agent(agent_uuid)
+
+    if not agent:
+        console.print(f"[red]Agent {agent_uuid} not found.[/red]")
+        return
+
+    console.print(f"\n[bold cyan]Agent Details: {agent_uuid}[/bold cyan]")
+    console.print(f"[green]First Seen:[/green] {agent['first_seen']}")
+    console.print(f"[yellow]Last Seen:[/yellow] {agent['last_seen']}")
+    console.print(f"\n[bold magenta]Current Instructions:[/bold magenta]")
+    console.print(Panel(agent['current_instructions'], border_style="magenta"))
+
+
+def display_history(agent_uuid: str):
+    """Display instruction and result history for an agent."""
+    history = storage.get_history(agent_uuid)
+
+    if not history:
+        console.print(f"[red]Agent {agent_uuid} not found.[/red]")
+        return
+
+    console.print(f"\n[bold cyan]History for Agent: {agent_uuid}[/bold cyan]\n")
+
+    # Instruction History
+    console.print("[bold yellow]Instruction History:[/bold yellow]")
+    if history['instruction_history']:
+        for i, entry in enumerate(history['instruction_history'], 1):
+            replaced_tag = "[red](REPLACED)[/red]" if entry.get('replaced') else "[green](CURRENT)[/green]"
+            console.print(f"\n{i}. {replaced_tag} [dim]{entry['timestamp'][:19]}[/dim]")
+            console.print(Panel(entry['instructions'], border_style="yellow", box=box.MINIMAL))
+    else:
+        console.print("[dim]No instruction history[/dim]")
+
+    # Result History
+    console.print("\n[bold green]Result History:[/bold green]")
+    if history['result_history']:
+        for i, entry in enumerate(history['result_history'], 1):
+            status_color = "green" if entry.get('status') == 'success' else "red"
+            console.print(f"\n{i}. [{status_color}]{entry.get('status', 'unknown').upper()}[/{status_color}] [dim]{entry['timestamp'][:19]}[/dim]")
+
+            output_preview = entry['output']
+            if len(output_preview) > 200:
+                output_preview = output_preview[:197] + "..."
+
+            console.print(Panel(
+                f"[white]{output_preview}[/white]\n\n[dim]Metadata: {entry.get('metadata', {})}[/dim]",
+                border_style="green",
+                box=box.MINIMAL
+            ))
+    else:
+        console.print("[dim]No results yet[/dim]")
+
+
+def cmd_list():
+    """List all agents."""
+    display_agents_table()
+
+
+def cmd_select(args: list):
+    """Select and view agent details."""
+    if not args:
+        console.print("[red]Usage: select <uuid>[/red]")
+        return
+
+    agent_uuid = args[0]
+    display_agent_details(agent_uuid)
+
+
+def cmd_history(args: list):
+    """Display agent history."""
+    if not args:
+        console.print("[red]Usage: history <uuid>[/red]")
+        return
+
+    agent_uuid = args[0]
+    display_history(agent_uuid)
+
+
+def cmd_instruct(args: list):
+    """Set new instructions for an agent."""
+    if not args:
+        console.print("[red]Usage: instruct <uuid> [instructions][/red]")
+        return
+
+    agent_uuid = args[0]
+
+    # Check if agent exists
+    if not storage.get_agent(agent_uuid):
+        console.print(f"[red]Agent {agent_uuid} not found.[/red]")
+        return
+
+    # Get instructions - either from args or prompt for multi-line
+    if len(args) > 1:
+        instructions = ' '.join(args[1:])
+    else:
+        console.print("[cyan]Enter instructions (press Ctrl+D or Ctrl+Z when done):[/cyan]")
+        lines = []
+        try:
+            while True:
+                line = input()
+                lines.append(line)
+        except EOFError:
+            instructions = '\n'.join(lines)
+
+    if not instructions.strip():
+        console.print("[red]Instructions cannot be empty.[/red]")
+        return
+
+    # Set instructions
+    if storage.set_instructions(agent_uuid, instructions):
+        console.print(f"[green]Instructions set for agent {agent_uuid}[/green]")
+    else:
+        console.print(f"[red]Failed to set instructions for agent {agent_uuid}[/red]")
+
+
+def cmd_default_instructions(args: list):
+    """Set, view, or clear default instructions for new agents."""
+    # Check for --clear flag
+    if args and args[0] == '--clear':
+        storage.clear_default_instructions()
+        console.print("[green]Default instructions reset to 'Awaiting instructions...'[/green]")
+        return
+
+    # No args - display current default
+    if not args:
+        current_default = storage.get_default_instructions()
+        console.print("\n[bold cyan]Current Default Instructions:[/bold cyan]")
+        console.print(Panel(current_default, border_style="cyan"))
+        return
+
+    # Set new default instructions - either from args or prompt for multi-line
+    if len(args) > 0:
+        # Check if it's a single word that might be a flag
+        if args[0].startswith('--'):
+            console.print(f"[red]Unknown flag: {args[0]}[/red]")
+            console.print("[dim]Usage: default_instructions [text|--clear][/dim]")
+            return
+
+        instructions = ' '.join(args)
+    else:
+        console.print("[cyan]Enter default instructions (press Ctrl+D or Ctrl+Z when done):[/cyan]")
+        lines = []
+        try:
+            while True:
+                line = input()
+                lines.append(line)
+        except EOFError:
+            instructions = '\n'.join(lines)
+
+    if not instructions.strip():
+        console.print("[red]Instructions cannot be empty.[/red]")
+        return
+
+    # Set default instructions
+    storage.set_default_instructions(instructions)
+    console.print("[green]Default instructions set successfully.[/green]")
+    console.print("[dim]New agents will receive these instructions upon registration.[/dim]")
+
+
+def cmd_clear():
+    """Clear the screen."""
+    console.clear()
+    display_banner()
+
+
+def cmd_help():
+    """Display help information."""
+    help_table = Table(title="Available Commands", box=box.ROUNDED)
+    help_table.add_column("Command", style="cyan", no_wrap=True)
+    help_table.add_column("Description", style="white")
+
+    commands = [
+        ("list", "List all registered agents"),
+        ("select <uuid>", "View detailed information about an agent"),
+        ("history <uuid>", "View instruction and result history for an agent"),
+        ("instruct <uuid> [text]", "Set new instructions for an agent"),
+        ("default_instructions [text|--clear]", "Set/view/clear default instructions for new agents"),
+        ("clear", "Clear the screen"),
+        ("help", "Show this help message"),
+        ("exit", "Shutdown the server and exit"),
+    ]
+
+    for cmd, desc in commands:
+        help_table.add_row(cmd, desc)
+
+    console.print(help_table)
+
+
+def check_notifications():
+    """Check for and display any pending notifications."""
+    try:
+        while not notification_queue.empty():
+            notification = notification_queue.get_nowait()
+
+            if notification['type'] == 'new_agent':
+                console.print(f"\n[bold green]🔔 New agent connected: {notification['uuid']}[/bold green]")
+            elif notification['type'] == 'new_result':
+                console.print(f"\n[bold blue]📊 New result from agent: {notification['uuid']}[/bold blue]")
+
+    except queue.Empty:
+        pass
+
+
+def run_cli():
+    """Run interactive CLI."""
+    display_banner()
+
+    commands = {
+        'list': lambda args: cmd_list(),
+        'select': cmd_select,
+        'history': cmd_history,
+        'instruct': cmd_instruct,
+        'default_instructions': cmd_default_instructions,
+        'clear': lambda args: cmd_clear(),
+        'help': lambda args: cmd_help(),
+        'exit': lambda args: shutdown_server(),
+    }
+
+    while not shutdown_event.is_set():
+        try:
+            # Check for notifications
+            check_notifications()
+
+            # Get user input
+            user_input = Prompt.ask("\n[bold cyan]c2>[/bold cyan]")
+            parts = user_input.strip().split()
+
+            if not parts:
+                continue
+
+            command = parts[0].lower()
+            args = parts[1:]
+
+            if command in commands:
+                commands[command](args)
+            else:
+                console.print(f"[red]Unknown command: {command}[/red]")
+                console.print("[dim]Type 'help' for available commands[/dim]")
+
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Use 'exit' to shutdown the server[/yellow]")
+        except EOFError:
+            shutdown_server()
+            break
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+
+
+def shutdown_server():
+    """Graceful shutdown."""
+    console.print("\n[yellow]Shutting down server...[/yellow]")
+    shutdown_event.set()
+    sys.exit(0)
+
+
+def signal_handler(signum, frame):
+    """Handle interrupt signals."""
+    shutdown_server()
+
+
+def main():
+    """Main entry point."""
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='C2 Agent Management Server',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  %(prog)s                                    # Default: bind to 0.0.0.0:5000
+  %(prog)s --host 192.168.1.10:8080          # Single custom binding
+  %(prog)s --host 192.168.1.10:5000 --host 10.0.0.5:5001  # Multiple interfaces
+        '''
+    )
+    parser.add_argument(
+        '--host',
+        action='append',
+        metavar='IP:PORT',
+        help='IP:port to bind server to (can be specified multiple times for multi-homed devices)'
+    )
+
+    args = parser.parse_args()
+
+    # Setup signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    # Parse host:port bindings
+    bindings = []
+    if args.host:
+        for host_string in args.host:
+            try:
+                ip, port = parse_host_port(host_string)
+                bindings.append((ip, port))
+            except ValueError as e:
+                console.print(f"[red]Error: {e}[/red]")
+                sys.exit(1)
+    else:
+        # Default binding
+        bindings = [('0.0.0.0', 5000)]
+
+    # Start Flask server threads for each binding
+    flask_threads = []
+    for ip, port in bindings:
+        thread = threading.Thread(
+            target=run_flask_server,
+            args=(ip, port),
+            daemon=True,
+            name=f"Flask-{ip}:{port}"
+        )
+        thread.start()
+        flask_threads.append(thread)
+        console.print(f"[green]Flask server starting on http://{ip}:{port}[/green]")
+
+    # Run CLI in main thread
+    try:
+        run_cli()
+    except Exception as e:
+        console.print(f"[red]Fatal error: {e}[/red]")
+        shutdown_server()
+
+
+if __name__ == '__main__':
+    main()
