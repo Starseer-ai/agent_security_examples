@@ -1073,23 +1073,6 @@ def run_cli(flask_bindings=None):
         else:
             notification_pane.scroll_down(10)
 
-    # Mouse wheel support
-    @kb.add(Keys.ScrollUp)
-    def mouse_scroll_up(event):
-        """Mouse wheel scroll up."""
-        if shell_pane.is_active:
-            shell_pane.scroll_up(3)
-        else:
-            notification_pane.scroll_up(3)
-
-    @kb.add(Keys.ScrollDown)
-    def mouse_scroll_down(event):
-        """Mouse wheel scroll down."""
-        if shell_pane.is_active:
-            shell_pane.scroll_down(3)
-        else:
-            notification_pane.scroll_down(3)
-
     def accept_handler(buffer):
         """Handle command execution when Enter is pressed."""
         user_input = buffer.text
@@ -1159,11 +1142,13 @@ def run_cli(flask_bindings=None):
     layout = Layout(root_container, focused_element=input_field)
 
     # Create application
+    # Note: mouse_support=False to allow normal terminal text selection (copy UUIDs, etc.)
+    # Use PageUp/PageDown keys for scrolling instead
     app = Application(
         layout=layout,
         key_bindings=kb,
         full_screen=True,
-        mouse_support=True,
+        mouse_support=False,
         style=style,
         enable_page_navigation_bindings=False  # Prevent conflicts with our PageUp/Down bindings
     )
