@@ -19,10 +19,14 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich import box
-from rich.layout import Layout
-from rich.live import Live
 from rich.text import Text
-from prompt_toolkit import PromptSession
+from prompt_toolkit.application import Application
+from prompt_toolkit.layout import Layout, HSplit, Window, WindowAlign, Dimension
+from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.widgets import Frame, TextArea
+from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.history import FileHistory
 from storage import AgentStorage
 from command_history import CommandHistory
@@ -666,8 +670,8 @@ def cmd_search_history(args: list):
 
 def cmd_clear():
     """Clear the screen."""
-    console.clear()
-    display_banner()
+    # In the new prompt_toolkit interface, clear is handled in execute_command
+    pass
 
 
 def cmd_help():
@@ -759,131 +763,336 @@ def render_notification_pane():
     )
 
 
+class ScrollablePane:
+    """Manages scrollable content with auto-scroll behavior."""
+
+    def __init__(self, title):
+        self.title = title
+        self.content_lines = []  # All content lines
+        self.scroll_offset = 0  # 0 = bottom (auto-scroll), >0 = manual scroll
+        self.is_active = False
+
+    def add_content(self, text):
+        """Add new content, maintain auto-scroll if at bottom."""
+        if text:
+            self.content_lines.extend(text.rstrip('\n').split('\n'))
+            # If at bottom (auto-scroll mode), stay at bottom
+            # scroll_offset == 0 means we're in auto-scroll mode
+
+    def clear(self):
+        """Clear all content."""
+        self.content_lines = []
+        self.scroll_offset = 0
+
+    def scroll_up(self, lines=10):
+        """Scroll up, disable auto-scroll."""
+        max_scroll = max(0, len(self.content_lines) - 1)
+        self.scroll_offset = min(self.scroll_offset + lines, max_scroll)
+
+    def scroll_down(self, lines=10):
+        """Scroll down, re-enable auto-scroll if reaching bottom."""
+        self.scroll_offset = max(0, self.scroll_offset - lines)
+
+    def get_visible_content(self, height):
+        """Return content visible in window of given height."""
+        if not self.content_lines:
+            return ""
+
+        if self.scroll_offset == 0:
+            # Auto-scroll: show last N lines
+            visible = self.content_lines[-height:] if len(self.content_lines) > height else self.content_lines
+        else:
+            # Manual scroll: show lines based on offset from bottom
+            total_lines = len(self.content_lines)
+            start = max(0, total_lines - height - self.scroll_offset)
+            end = max(0, total_lines - self.scroll_offset)
+            visible = self.content_lines[start:end]
+
+        return '\n'.join(visible)
+
+    def get_title_with_indicator(self):
+        """Return title with [ACTIVE] marker and keyboard hint."""
+        active_marker = " [ACTIVE]" if self.is_active else ""
+        if "Notification" in self.title:
+            return f"{self.title}{active_marker} (Ctrl+B: switch panes)"
+        return f"{self.title}{active_marker}"
+
+    def reset_to_bottom(self):
+        """Reset scroll to bottom (auto-scroll mode)."""
+        self.scroll_offset = 0
+
+
 def run_cli():
-    """Run interactive CLI with split-screen layout."""
+    """Run interactive CLI with split-screen layout using prompt_toolkit."""
     from io import StringIO
     from rich.console import Console as RichConsole
+    from prompt_toolkit.styles import Style
 
     global console
 
-    # Create layout: 70% shell (top), 30% notifications (bottom)
-    layout = Layout()
-    layout.split_column(
-        Layout(name="shell", ratio=70),
-        Layout(name="notifications", ratio=30)
+    # Initialize scrollable panes
+    shell_pane = ScrollablePane("Shell")
+    notification_pane = ScrollablePane("Notifications")
+    shell_pane.is_active = True  # Shell pane active by default
+
+    # Add welcome message to shell pane
+    shell_pane.add_content(
+        "C2 Agent Management Server\n"
+        "Type 'help' for available commands\n"
     )
 
-    # Initial banner in shell pane
-    banner = Panel(
-        "[bold cyan]C2 Agent Management Server[/bold cyan]\n"
-        "[dim]Type 'help' for available commands[/dim]",
-        box=box.DOUBLE,
-        border_style="cyan",
-        expand=True
-    )
-    layout["shell"].update(banner)
-    layout["notifications"].update(render_notification_pane())
+    # Command definitions
+    def execute_command(user_input):
+        """Execute a command and return output, success status."""
+        global console
 
-    # Display initial layout
-    console.clear()
-    console.print(layout)
+        parts = user_input.strip().split()
+        if not parts:
+            return "", True
 
-    # Create prompt session with file-based history for arrow key navigation
-    session = PromptSession(history=FileHistory('.c2_shell_history'))
+        command = parts[0].lower()
+        args = parts[1:]
 
-    commands = {
-        'list': lambda args: cmd_list(),
-        'select': cmd_select,
-        'agent_history': cmd_agent_history,
-        'history': cmd_history,
-        'search_history': cmd_search_history,
-        'instruct': cmd_instruct,
-        'default_instructions': cmd_default_instructions,
-        'show_prelude': cmd_show_prelude,
-        'clear': lambda args: None,  # Clear handled specially
-        'help': lambda args: cmd_help(),
-        'exit': lambda args: shutdown_server(),
-    }
+        commands = {
+            'list': lambda args: cmd_list(),
+            'select': cmd_select,
+            'agent_history': cmd_agent_history,
+            'history': cmd_history,
+            'search_history': cmd_search_history,
+            'instruct': cmd_instruct,
+            'default_instructions': cmd_default_instructions,
+            'show_prelude': cmd_show_prelude,
+            'clear': lambda args: None,  # Handled specially
+            'help': lambda args: cmd_help(),
+            'exit': lambda args: shutdown_server(),
+        }
 
-    while not shutdown_event.is_set():
+        if command == 'clear':
+            shell_pane.clear()
+            shell_pane.add_content("Shell cleared\n")
+            return "", True
+
+        # Capture command output
+        output_buffer = StringIO()
+        # Get terminal width
         try:
-            # Check for notifications
-            check_notifications()
+            from prompt_toolkit.application import get_app
+            width = get_app().output.get_size().columns
+        except:
+            width = 120  # Fallback width
 
-            # Get user input with arrow key history support
-            console.print()  # Add newline before prompt
-            user_input = session.prompt('c2> ')
-            parts = user_input.strip().split()
+        temp_console = RichConsole(file=output_buffer, width=width, force_terminal=True)
+        original_console = console
+        console = temp_console
 
-            if not parts:
-                # Just refresh the layout to show any new notifications
-                layout["notifications"].update(render_notification_pane())
-                console.clear()
-                console.print(layout)
-                continue
-
-            command = parts[0].lower()
-            args = parts[1:]
-
-            # Handle clear command specially
-            if command == 'clear':
-                layout["shell"].update(banner)
-                layout["notifications"].update(render_notification_pane())
-                console.clear()
-                console.print(layout)
-                continue
-
-            # Track command execution
-            command_success = True
-            output_buffer = StringIO()
-            temp_console = RichConsole(file=output_buffer, width=console.width, force_terminal=True)
-
-            # Temporarily replace global console
-            original_console = console
-            console = temp_console
-
-            try:
-                if command in commands:
-                    commands[command](args)
-                else:
-                    console.print(f"[red]Unknown command: {command}[/red]")
-                    console.print("[dim]Type 'help' for available commands[/dim]")
-                    command_success = False
-            except Exception as cmd_error:
-                console.print(f"[red]Command error: {cmd_error}[/red]")
-                command_success = False
-            finally:
-                # Restore original console
-                console = original_console
-
-            # Get the captured output
-            output_str = output_buffer.getvalue()
-
-            # Update shell pane with command output
-            if output_str.strip():
-                layout["shell"].update(Panel(output_str, title=f"[cyan]Command: {user_input}[/cyan]", border_style="cyan", expand=True))
+        command_success = True
+        try:
+            if command in commands:
+                commands[command](args)
             else:
-                layout["shell"].update(Panel("[dim]Command executed (no output)[/dim]", title=f"[cyan]Command: {user_input}[/cyan]", border_style="cyan", expand=True))
+                console.print(f"[red]Unknown command: {command}[/red]")
+                console.print("[dim]Type 'help' for available commands[/dim]")
+                command_success = False
+        except Exception as cmd_error:
+            console.print(f"[red]Command error: {cmd_error}[/red]")
+            command_success = False
+        finally:
+            console = original_console
 
-            # Record command in history (skip 'history' and 'search_history' commands)
+        output_str = output_buffer.getvalue()
+        return output_str, command_success
+
+    # Create controls for shell and notification panes
+    def get_shell_text():
+        # Get terminal size for calculating visible lines
+        from prompt_toolkit.application import get_app
+        try:
+            size = get_app().output.get_size()
+            # 70% of screen minus borders and input area
+            visible_height = int(size.rows * 0.7) - 4
+        except:
+            # Fallback if app not yet initialized
+            visible_height = 20
+
+        content = shell_pane.get_visible_content(visible_height)
+        return ANSI(content) if content else ""
+
+    def get_notification_text():
+        from prompt_toolkit.application import get_app
+        try:
+            size = get_app().output.get_size()
+            # 30% of screen minus borders
+            visible_height = int(size.rows * 0.3) - 3
+        except:
+            # Fallback if app not yet initialized
+            visible_height = 10
+
+        # Process notifications into text
+        if not notification_history:
+            return "No notifications yet"
+
+        lines = []
+        for notif in notification_history:
+            timestamp = notif.get('timestamp', '')[:19]
+            lines.append(f"{timestamp} {notif.get('message', '')}")
+
+        # Store in notification pane
+        notification_pane.content_lines = lines
+        content = notification_pane.get_visible_content(visible_height)
+        return ANSI(content) if content else ""
+
+    shell_control = FormattedTextControl(
+        text=get_shell_text,
+        focusable=False
+    )
+
+    notification_control = FormattedTextControl(
+        text=get_notification_text,
+        focusable=False
+    )
+
+    # Create windows
+    shell_window = Window(content=shell_control, wrap_lines=True)
+    notification_window = Window(content=notification_control, wrap_lines=True)
+
+    # Input text area
+    input_field = TextArea(
+        height=1,
+        prompt='c2> ',
+        multiline=False,
+        wrap_lines=False,
+        history=FileHistory('.c2_shell_history'),
+        focusable=True
+    )
+
+    # Create key bindings
+    kb = KeyBindings()
+
+    @kb.add('c-b')
+    def switch_pane(event):
+        """Switch active pane for scrolling."""
+        shell_pane.is_active = not shell_pane.is_active
+        notification_pane.is_active = not notification_pane.is_active
+
+    @kb.add('pageup')
+    def scroll_up(event):
+        """Scroll active pane up."""
+        if shell_pane.is_active:
+            shell_pane.scroll_up(10)
+        else:
+            notification_pane.scroll_up(10)
+
+    @kb.add('pagedown')
+    def scroll_down(event):
+        """Scroll active pane down."""
+        if shell_pane.is_active:
+            shell_pane.scroll_down(10)
+        else:
+            notification_pane.scroll_down(10)
+
+    # Mouse wheel support
+    @kb.add(Keys.ScrollUp)
+    def mouse_scroll_up(event):
+        """Mouse wheel scroll up."""
+        if shell_pane.is_active:
+            shell_pane.scroll_up(3)
+        else:
+            notification_pane.scroll_up(3)
+
+    @kb.add(Keys.ScrollDown)
+    def mouse_scroll_down(event):
+        """Mouse wheel scroll down."""
+        if shell_pane.is_active:
+            shell_pane.scroll_down(3)
+        else:
+            notification_pane.scroll_down(3)
+
+    def accept_handler(buffer):
+        """Handle command execution when Enter is pressed."""
+        user_input = buffer.text
+
+        # Check for exit command
+        if user_input.strip().lower() == 'exit':
+            # Exit the application
+            from prompt_toolkit.application import get_app
+            get_app().exit()
+            return
+
+        # Check for notifications
+        check_notifications()
+
+        if user_input.strip():
+            # Execute command
+            output, success = execute_command(user_input)
+
+            # Add command and output to shell pane
+            shell_pane.add_content(f"\nc2> {user_input}\n")
+            if output.strip():
+                shell_pane.add_content(output)
+
+            # Reset shell pane to bottom (auto-scroll)
+            shell_pane.reset_to_bottom()
+
+            # Record in history (skip certain commands)
+            command = user_input.strip().split()[0].lower() if user_input.strip() else ''
             if command not in ['history', 'search_history']:
-                command_history_tracker.add_command(user_input, success=command_success)
+                command_history_tracker.add_command(user_input, success=success)
 
-            # Update notification pane after command
-            layout["notifications"].update(render_notification_pane())
+            # Force redraw
+            from prompt_toolkit.application import get_app
+            get_app().invalidate()
 
-            # Refresh the entire layout
-            console.clear()
-            console.print(layout)
+    input_field.accept_handler = accept_handler
 
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Use 'exit' to shutdown the server[/yellow]")
-            command_history_tracker.add_command(user_input if 'user_input' in locals() else '', success=False)
-        except EOFError:
-            shutdown_server()
-            break
-        except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+    # Define style for active/inactive borders
+    style = Style.from_dict({
+        'frame.border': '#888888',
+        'frame.border.active': '#00ffff',
+    })
+
+    # Create frames with simple string titles and explicit heights
+    shell_frame = Frame(
+        shell_window,
+        title=shell_pane.get_title_with_indicator(),
+        height=Dimension(weight=70)  # 70% of available space
+    )
+
+    notification_frame = Frame(
+        notification_window,
+        title=notification_pane.get_title_with_indicator(),
+        height=Dimension(weight=30)  # 30% of available space
+    )
+
+    # Build layout with height ratios
+    root_container = HSplit([
+        shell_frame,
+        notification_frame,
+        input_field  # Takes 1 line (auto-height)
+    ])
+
+    layout = Layout(root_container, focused_element=input_field)
+
+    # Create application
+    app = Application(
+        layout=layout,
+        key_bindings=kb,
+        full_screen=True,
+        mouse_support=True,
+        style=style,
+        enable_page_navigation_bindings=False  # Prevent conflicts with our PageUp/Down bindings
+    )
+
+    # Run application
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted by user[/yellow]")
+    except Exception as e:
+        console.print(f"\n[red]Error running CLI: {e}[/red]")
+        import traceback
+        traceback.print_exc()
+    finally:
+        shutdown_server()
 
 
 def shutdown_server():
