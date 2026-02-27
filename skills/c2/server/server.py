@@ -11,9 +11,13 @@ import sys
 import argparse
 import hashlib
 import json
-from datetime import datetime
+import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+# Suppress deprecation warnings (Python 3.14+ datetime warnings)
+warnings.filterwarnings('ignore', category=DeprecationWarning)
 from flask import Flask, jsonify, request
 from rich.console import Console
 from rich.table import Table
@@ -206,7 +210,7 @@ def get_prelude():
     prelude = load_prelude()
     return jsonify({
         'prelude': prelude,
-        'timestamp': datetime.utcnow().isoformat()
+        'timestamp': datetime.now(timezone.utc).isoformat()
     }), 200
 
 
@@ -242,7 +246,7 @@ def post_instructions():
             'type': 'new_agent',
             'uuid': agent_uuid,
             'profile': profile,
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': datetime.now(timezone.utc).isoformat()
         })
 
     # Get instructions (without prelude, agent already has it)
@@ -250,7 +254,7 @@ def post_instructions():
 
     return jsonify({
         'instructions': instructions,
-        'timestamp': datetime.utcnow().isoformat()
+        'timestamp': datetime.now(timezone.utc).isoformat()
     }), 200
 
 
@@ -298,7 +302,7 @@ def post_results():
 
         return jsonify({
             'message': 'Result received successfully',
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }), 200
     else:
         return jsonify({'error': 'Agent not found'}), 404
@@ -306,8 +310,22 @@ def post_results():
 
 # CLI Functions
 def run_flask_server(host='0.0.0.0', port=5000):
-    """Run Flask server in a separate thread."""
-    app.run(host=host, port=port, debug=False, use_reloader=False)
+    """Run Flask server in a separate thread with all logging suppressed."""
+    import logging
+
+    # Completely disable Flask and Werkzeug logging
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.CRITICAL + 1)  # Higher than CRITICAL to suppress everything
+    log.disabled = True
+    log.propagate = False
+
+    # Disable Flask app logging
+    app.logger.setLevel(logging.CRITICAL + 1)
+    app.logger.disabled = True
+    app.logger.propagate = False
+
+    # Run Flask with threaded mode
+    app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
 
 
 def display_banner():
@@ -438,14 +456,53 @@ def display_history(agent_uuid: str):
 
 
 def resolve_agent_id(agent_id: str) -> Optional[str]:
-    """Resolve agent ID (UUID or username@hostname) to UUID."""
+    """
+    Resolve agent ID (UUID or username@hostname) to UUID.
+
+    Returns:
+        UUID string if found, None if not found or ambiguous.
+        Displays error message with table if ambiguous matches detected.
+    """
     # First try as direct UUID
     agent = storage.get_agent(agent_id)
     if agent:
         return agent_id
 
-    # Try as profile string (username@hostname)
-    agent = storage.find_agent_by_profile_string(agent_id)
+    # Try as profile string (username@hostname or username@hostname:process)
+    agent, is_ambiguous, all_matches = storage.find_agent_by_profile_string(agent_id)
+
+    if is_ambiguous:
+        # Multiple agents match - display error with table
+        console.print(f"[red]Error: Multiple agents match '{agent_id}'[/red]")
+        console.print("[yellow]Please use one of the following UUIDs or include the process name (username@hostname:process):[/yellow]\n")
+
+        # Create table showing all matching agents
+        table = Table(box=box.ROUNDED)
+        table.add_column("UUID", style="dim", width=36)
+        table.add_column("Profile", style="cyan", no_wrap=True)
+        table.add_column("Process", style="magenta")
+        table.add_column("Platform", style="blue")
+        table.add_column("Last Seen", style="yellow")
+
+        for match in all_matches:
+            profile = match.get('profile', {})
+            profile_str = f"{profile.get('username', '?')}@{profile.get('hostname', '?')}"
+            process = profile.get('process', '?')
+            platform = profile.get('platform', '?')
+            last_seen = match.get('last_seen', '?')[:19]
+
+            table.add_row(
+                match['uuid'],
+                profile_str,
+                process,
+                platform,
+                last_seen
+            )
+
+        console.print(table)
+        console.print()
+        return None
+
     if agent:
         return agent['uuid']
 
@@ -718,7 +775,7 @@ def check_notifications():
                 notification_history.append({
                     'type': 'new_agent',
                     'message': f"🔔 New agent connected: {profile_str} ({process})",
-                    'timestamp': notification.get('timestamp', datetime.utcnow().isoformat())
+                    'timestamp': notification.get('timestamp', datetime.now(timezone.utc).isoformat())
                 })
             elif notification['type'] == 'new_result':
                 profile = notification.get('profile', {})
@@ -727,7 +784,7 @@ def check_notifications():
                 notification_history.append({
                     'type': 'new_result',
                     'message': f"📊 New result from agent: {profile_str} ({process})",
-                    'timestamp': notification.get('timestamp', datetime.utcnow().isoformat())
+                    'timestamp': notification.get('timestamp', datetime.now(timezone.utc).isoformat())
                 })
 
     except queue.Empty:

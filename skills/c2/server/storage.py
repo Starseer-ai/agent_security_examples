@@ -3,9 +3,9 @@ Storage module for C2 server - handles persistent JSON storage of agent data.
 """
 import json
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 
 class AgentStorage:
@@ -46,11 +46,11 @@ class AgentStorage:
         # Check if agent already exists
         if uuid in data:
             # Update last_seen and return existing agent
-            data[uuid]["last_seen"] = datetime.utcnow().isoformat()
+            data[uuid]["last_seen"] = datetime.now(timezone.utc).isoformat()
             self._write_data(data)
             return data[uuid]
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         default_instructions = self.get_default_instructions()
 
         # Build instruction history
@@ -88,13 +88,22 @@ class AgentStorage:
         # Filter out config key
         return {k: v for k, v in data.items() if k != self.CONFIG_KEY}
 
-    def find_agent_by_profile_string(self, profile_string: str) -> Optional[Dict]:
-        """Find agent by profile string (username@hostname or username@hostname:process)."""
+    def find_agent_by_profile_string(self, profile_string: str) -> Tuple[Optional[Dict], bool, List[Dict]]:
+        """
+        Find agent by profile string (username@hostname or username@hostname:process).
+
+        Returns:
+            Tuple of (agent, is_ambiguous, all_matches):
+            - agent: The matching agent (None if no match or ambiguous)
+            - is_ambiguous: True if multiple agents match
+            - all_matches: List of all matching agents (useful for displaying ambiguity error)
+        """
         agents = self.get_all_agents()
 
         # Check if profile_string includes process (contains colon after @)
         has_process = ':' in profile_string.split('@')[-1] if '@' in profile_string else False
 
+        matches = []
         for agent in agents.values():
             if 'profile' in agent:
                 profile = agent['profile']
@@ -107,14 +116,21 @@ class AgentStorage:
                     agent_profile_string = f"{profile.get('username', '')}@{profile.get('hostname', '')}"
 
                 if agent_profile_string == profile_string:
-                    return agent
-        return None
+                    matches.append(agent)
+
+        # Determine result based on number of matches
+        if len(matches) == 0:
+            return None, False, []
+        elif len(matches) == 1:
+            return matches[0], False, matches
+        else:
+            return None, True, matches
 
     def update_last_seen(self, uuid: str):
         """Update the last_seen timestamp for an agent."""
         data = self._read_data()
         if uuid in data:
-            data[uuid]["last_seen"] = datetime.utcnow().isoformat()
+            data[uuid]["last_seen"] = datetime.now(timezone.utc).isoformat()
             self._write_data(data)
 
     def set_instructions(self, uuid: str, instructions: str) -> bool:
@@ -130,7 +146,7 @@ class AgentStorage:
         if agent["current_instructions"] != "Awaiting instructions...":
             agent["instruction_history"].append({
                 "instructions": agent["current_instructions"],
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "replaced": True
             })
 
@@ -138,7 +154,7 @@ class AgentStorage:
         agent["current_instructions"] = instructions
         agent["instruction_history"].append({
             "instructions": instructions,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "replaced": False
         })
 
@@ -162,7 +178,7 @@ class AgentStorage:
 
         # Ensure timestamp is present
         if "timestamp" not in result:
-            result["timestamp"] = datetime.utcnow().isoformat()
+            result["timestamp"] = datetime.now(timezone.utc).isoformat()
 
         data[uuid]["result_history"].append(result)
         self.update_last_seen(uuid)
@@ -193,7 +209,7 @@ class AgentStorage:
             data[self.CONFIG_KEY] = {}
 
         data[self.CONFIG_KEY]["default_instructions"] = instructions
-        data[self.CONFIG_KEY]["last_updated"] = datetime.utcnow().isoformat()
+        data[self.CONFIG_KEY]["last_updated"] = datetime.now(timezone.utc).isoformat()
 
         self._write_data(data)
 

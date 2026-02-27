@@ -4,7 +4,7 @@ Tracks command execution with timestamps and success/error status.
 """
 import json
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Optional
 
@@ -45,7 +45,7 @@ class CommandHistory:
 
         entry = {
             'command': command,
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'success': success
         }
 
