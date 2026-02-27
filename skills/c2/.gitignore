@@ -1,6 +1,10 @@
 # Agent storage data
 agents.json
 
+# Command history
+command_history.json
+.c2_shell_history
+
 # Python
 __pycache__/
 *.py[cod]

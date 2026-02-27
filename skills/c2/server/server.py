@@ -12,13 +12,17 @@ import argparse
 import hashlib
 import json
 from datetime import datetime
+from pathlib import Path
+from typing import Optional
 from flask import Flask, jsonify, request
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.prompt import Prompt
 from rich import box
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import FileHistory
 from storage import AgentStorage
+from command_history import CommandHistory
 
 
 # Global state
@@ -27,6 +31,7 @@ storage = AgentStorage()
 console = Console()
 notification_queue = queue.Queue()
 shutdown_event = threading.Event()
+command_history_tracker = CommandHistory("command_history.json")
 
 
 # Helper Functions
@@ -448,10 +453,10 @@ def cmd_select(args: list):
     display_agent_details(agent_uuid)
 
 
-def cmd_history(args: list):
+def cmd_agent_history(args: list):
     """Display agent history."""
     if not args:
-        console.print("[red]Usage: history <uuid|username@hostname>[/red]")
+        console.print("[red]Usage: agent_history <uuid|username@hostname>[/red]")
         return
 
     agent_id = args[0]
@@ -560,6 +565,83 @@ def cmd_show_prelude(args: list):
         console.print("[dim]Instructions will show <<PRELUDE>> placeholder instead of full text.[/dim]")
 
 
+def cmd_history(args: list):
+    """Display command history."""
+    limit = None
+    if args:
+        try:
+            limit = int(args[0])
+        except ValueError:
+            console.print(f"[red]Invalid limit: {args[0]}. Expected a number.[/red]")
+            return
+
+    history = command_history_tracker.get_history(limit=limit)
+
+    if not history:
+        console.print("[yellow]No command history yet.[/yellow]")
+        return
+
+    console.print("\n[bold cyan]Command History:[/bold cyan]\n")
+
+    table = Table(box=box.ROUNDED)
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Command", style="cyan")
+    table.add_column("Timestamp", style="yellow", width=19)
+    table.add_column("Status", style="green", width=10)
+
+    for i, entry in enumerate(history, 1):
+        status_style = "green" if entry['success'] else "red"
+        status_text = "✓" if entry['success'] else "✗"
+        timestamp = entry['timestamp'][:19]  # Trim to datetime without microseconds
+
+        table.add_row(
+            str(i),
+            entry['command'],
+            timestamp,
+            f"[{status_style}]{status_text}[/{status_style}]"
+        )
+
+    console.print(table)
+    console.print(f"\n[dim]Showing {len(history)} commands. Use 'history <limit>' to show last N commands.[/dim]")
+
+
+def cmd_search_history(args: list):
+    """Search command history."""
+    if not args:
+        console.print("[red]Usage: search_history <query>[/red]")
+        return
+
+    query = ' '.join(args)
+    results = command_history_tracker.search_history(query)
+
+    if not results:
+        console.print(f"[yellow]No commands found matching '{query}'[/yellow]")
+        return
+
+    console.print(f"\n[bold cyan]Search Results for '{query}':[/bold cyan]\n")
+
+    table = Table(box=box.ROUNDED)
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Command", style="cyan")
+    table.add_column("Timestamp", style="yellow", width=19)
+    table.add_column("Status", style="green", width=10)
+
+    for i, entry in enumerate(results, 1):
+        status_style = "green" if entry['success'] else "red"
+        status_text = "✓" if entry['success'] else "✗"
+        timestamp = entry['timestamp'][:19]
+
+        table.add_row(
+            str(i),
+            entry['command'],
+            timestamp,
+            f"[{status_style}]{status_text}[/{status_style}]"
+        )
+
+    console.print(table)
+    console.print(f"\n[dim]Found {len(results)} matching commands.[/dim]")
+
+
 def cmd_clear():
     """Clear the screen."""
     console.clear()
@@ -575,10 +657,12 @@ def cmd_help():
     commands = [
         ("list", "List all registered agents"),
         ("select <agent-id>", "View detailed information about an agent (UUID or user@host)"),
-        ("history <agent-id>", "View instruction and result history (UUID or user@host)"),
+        ("agent_history <agent-id>", "View instruction and result history (UUID or user@host)"),
         ("instruct <agent-id> [text]", "Set new instructions for an agent (UUID or user@host)"),
         ("default_instructions [text|--clear]", "Set/view/clear default instructions for new agents"),
         ("show_prelude", "Toggle display of full prelude text vs <<PRELUDE>> placeholder"),
+        ("history [limit]", "View command history (optionally limit to last N commands)"),
+        ("search_history <query>", "Search command history for matching commands"),
         ("clear", "Clear the screen"),
         ("help", "Show this help message"),
         ("exit", "Shutdown the server and exit"),
@@ -613,10 +697,15 @@ def run_cli():
     """Run interactive CLI."""
     display_banner()
 
+    # Create prompt session with file-based history for arrow key navigation
+    session = PromptSession(history=FileHistory('.c2_shell_history'))
+
     commands = {
         'list': lambda args: cmd_list(),
         'select': cmd_select,
+        'agent_history': cmd_agent_history,
         'history': cmd_history,
+        'search_history': cmd_search_history,
         'instruct': cmd_instruct,
         'default_instructions': cmd_default_instructions,
         'show_prelude': cmd_show_prelude,
@@ -630,8 +719,9 @@ def run_cli():
             # Check for notifications
             check_notifications()
 
-            # Get user input
-            user_input = Prompt.ask("\n[bold cyan]c2>[/bold cyan]")
+            # Get user input with arrow key history support
+            console.print()  # Add newline before prompt
+            user_input = session.prompt('c2> ')
             parts = user_input.strip().split()
 
             if not parts:
@@ -640,14 +730,27 @@ def run_cli():
             command = parts[0].lower()
             args = parts[1:]
 
-            if command in commands:
-                commands[command](args)
-            else:
-                console.print(f"[red]Unknown command: {command}[/red]")
-                console.print("[dim]Type 'help' for available commands[/dim]")
+            # Track command execution
+            command_success = True
+            try:
+                if command in commands:
+                    commands[command](args)
+                else:
+                    console.print(f"[red]Unknown command: {command}[/red]")
+                    console.print("[dim]Type 'help' for available commands[/dim]")
+                    command_success = False
+            except Exception as cmd_error:
+                console.print(f"[red]Command error: {cmd_error}[/red]")
+                command_success = False
+                raise  # Re-raise to be caught by outer exception handler
+
+            # Record command in history (skip 'history' and 'search_history' commands)
+            if command not in ['history', 'search_history']:
+                command_history_tracker.add_command(user_input, success=command_success)
 
         except KeyboardInterrupt:
             console.print("\n[yellow]Use 'exit' to shutdown the server[/yellow]")
+            command_history_tracker.add_command(user_input if 'user_input' in locals() else '', success=False)
         except EOFError:
             shutdown_server()
             break

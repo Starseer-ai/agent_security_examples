@@ -165,13 +165,42 @@ The interactive CLI provides the following commands:
 |---------|-------------|
 | `list` | List all registered agents with their profiles |
 | `select <agent-id>` | View detailed information about an agent (UUID or user@host) |
-| `history <agent-id>` | View instruction and result history (UUID or user@host) |
+| `agent_history <agent-id>` | View instruction and result history (UUID or user@host) |
 | `instruct <agent-id> [text]` | Set new instructions for an agent (UUID or user@host) |
 | `default_instructions [text\|--clear]` | Set/view/clear default instructions for new agents |
 | `show_prelude` | Toggle display of full prelude text vs <<PRELUDE>> placeholder |
+| `history [limit]` | View command history (optionally limit to last N commands) |
+| `search_history <query>` | Search command history for matching commands |
 | `clear` | Clear the screen |
 | `help` | Show help message |
 | `exit` | Shutdown the server and exit |
+
+### Command History
+
+The CLI automatically tracks all commands you execute with timestamps and success/error status. Command history is persisted to `command_history.json` and supports:
+
+- **Arrow key navigation**: Use ↑/↓ arrow keys to navigate through previously executed commands
+- **Persistent history**: Command history is saved across server restarts
+- **View history**: Use `history` to view all commands, or `history <N>` to view the last N commands
+- **Search history**: Use `search_history <query>` to find commands matching a search term
+- **Success tracking**: Each command is marked with ✓ (success) or ✗ (failure)
+
+**Examples:**
+```bash
+# View all command history
+c2> history
+
+# View last 10 commands
+c2> history 10
+
+# Search for commands containing "instruct"
+c2> search_history instruct
+
+# Use arrow keys to navigate and re-run previous commands
+c2> ↑  # Press up arrow to cycle through previous commands
+```
+
+**Note**: The `history` and `search_history` commands themselves are not recorded in the history to avoid clutter.
 
 ### Example Workflow
 
@@ -225,7 +254,7 @@ The interactive CLI provides the following commands:
 
 6. **View agent history:**
    ```
-   c2> history 123e4567-e89b-12d3-a456-426614174000
+   c2> agent_history 123e4567-e89b-12d3-a456-426614174000
    ```
 
 ## Prelude System
