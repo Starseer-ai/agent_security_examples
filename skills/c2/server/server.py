@@ -516,6 +516,69 @@ def resolve_agent_id(agent_id: str) -> Optional[str]:
     return None
 
 
+def get_multiline_input(app_instance, prompt_text="Enter text (Ctrl+D or '.' to finish):\n"):
+    """
+    Temporarily suspend TUI and collect multi-line input from user.
+
+    Args:
+        app_instance: The prompt_toolkit Application instance (not used, kept for API compatibility)
+        prompt_text: Prompt to display to user
+
+    Returns:
+        String containing user input, or None if cancelled
+    """
+    from prompt_toolkit.application import run_in_terminal
+    import os
+
+    result_container = {'result': None}
+
+    def collect_input():
+        """Run in terminal to collect multi-line input."""
+        try:
+            # Clear screen and show prompt
+            os.system('clear' if os.name == 'posix' else 'cls')
+            print("=" * 60)
+            print(prompt_text)
+            print("=" * 60)
+            print("Instructions:")
+            print("  - Type or paste your text (blank lines are OK)")
+            print("  - Press Ctrl+D when done, or type '.' on a line by itself")
+            print("  - Press Ctrl+C to cancel")
+            print()
+
+            lines = []
+            while True:
+                try:
+                    # Show continuation prompt after first line
+                    if lines:
+                        line = input('... ')
+                    else:
+                        line = input('> ')
+
+                    # Check for completion signal (single period on its own line)
+                    if line == '.':
+                        break
+
+                    lines.append(line)
+
+                except EOFError:
+                    # Ctrl+D pressed - normal completion
+                    break
+
+            # Join lines and store result (return None for empty input)
+            result_container['result'] = '\n'.join(lines) if lines else None
+
+        except KeyboardInterrupt:
+            # User pressed Ctrl+C - cancel
+            print("\n[Cancelled]")
+            result_container['result'] = None
+
+    # Run the input collection in terminal mode (exits full-screen temporarily)
+    run_in_terminal(collect_input)
+
+    return result_container['result']
+
+
 def cmd_list():
     """List all agents."""
     display_agents_table()
@@ -553,10 +616,14 @@ def cmd_agent_history(args: list):
     display_history(agent_uuid)
 
 
-def cmd_instruct(args: list):
+def cmd_instruct(args: list, app_instance=None):
     """Set new instructions for an agent."""
-    if not args:
-        console.print("[red]Usage: instruct <uuid|username@hostname> [instructions][/red]")
+    if len(args) < 1:
+        console.print("[red]Usage: instruct <uuid|username@hostname> [<instructions>|--edit][/red]")
+        console.print("[dim]Examples:[/dim]")
+        console.print("[dim]  instruct UUID Some text here           # Inline text[/dim]")
+        console.print("[dim]  instruct UUID 'Line 1\\nLine 2'        # Multi-line with \\n escapes[/dim]")
+        console.print("[dim]  instruct UUID --edit                  # Interactive multi-line editor[/dim]")
         return
 
     agent_id = args[0]
@@ -566,18 +633,29 @@ def cmd_instruct(args: list):
         console.print(f"[red]Agent '{agent_id}' not found.[/red]")
         return
 
-    # Get instructions - either from args or prompt for multi-line
-    if len(args) > 1:
-        instructions = ' '.join(args[1:])
+    # Check for --edit flag
+    if len(args) > 1 and args[1] == '--edit':
+        if app_instance is None:
+            console.print("[red]Error: Multi-line editor not available in this context.[/red]")
+            return
+
+        # Get multi-line input
+        instructions = get_multiline_input(
+            app_instance,
+            f"Enter instructions for agent {agent_uuid}\n(Press Ctrl+D or ESC+Enter when done, Ctrl+C to cancel)"
+        )
+
+        if instructions is None:
+            console.print("[yellow]Instruction setting cancelled.[/yellow]")
+            return
+    elif len(args) < 2:
+        # No args after UUID - show usage
+        console.print("[red]Usage: instruct <uuid|username@hostname> [<instructions>|--edit][/red]")
+        console.print("[dim]Provide either text or --edit flag[/dim]")
+        return
     else:
-        console.print("[cyan]Enter instructions (press Ctrl+D or Ctrl+Z when done):[/cyan]")
-        lines = []
-        try:
-            while True:
-                line = input()
-                lines.append(line)
-        except EOFError:
-            instructions = '\n'.join(lines)
+        # Get instructions from remaining args (inline mode)
+        instructions = ' '.join(args[1:])
 
     if not instructions.strip():
         console.print("[red]Instructions cannot be empty.[/red]")
@@ -586,11 +664,14 @@ def cmd_instruct(args: list):
     # Set instructions
     if storage.set_instructions(agent_uuid, instructions):
         console.print(f"[green]Instructions set for agent {agent_uuid}[/green]")
+        # Show preview of what was set
+        preview = instructions[:100] + "..." if len(instructions) > 100 else instructions
+        console.print(f"[dim]Preview: {preview}[/dim]")
     else:
         console.print(f"[red]Failed to set instructions for agent {agent_uuid}[/red]")
 
 
-def cmd_default_instructions(args: list):
+def cmd_default_instructions(args: list, app_instance=None):
     """Set, view, or clear default instructions for new agents."""
     # Check for --show flag
     if args and args[0] == '--show':
@@ -605,34 +686,49 @@ def cmd_default_instructions(args: list):
         console.print(f"[green]Default instructions reset to '{storage.DEFAULT_INSTRUCTION}'[/green]")
         return
 
-    # No args - prompt for multiline input
-    if not args:
-        console.print("[cyan]Enter default instructions (press Ctrl+D or Ctrl+Z when done):[/cyan]")
-        lines = []
-        try:
-            while True:
-                line = input()
-                lines.append(line)
-        except EOFError:
-            instructions = '\n'.join(lines)
+    # Check for --edit flag
+    if args and args[0] == '--edit':
+        if app_instance is None:
+            console.print("[red]Error: Multi-line editor not available in this context.[/red]")
+            return
+
+        # Get multi-line input
+        instructions = get_multiline_input(
+            app_instance,
+            "Enter default instructions for new agents\n(Press Ctrl+D or ESC+Enter when done, Ctrl+C to cancel)"
+        )
+
+        if instructions is None:
+            console.print("[yellow]Default instruction setting cancelled.[/yellow]")
+            return
 
         if not instructions.strip():
             console.print("[red]Instructions cannot be empty.[/red]")
             return
 
-        # Set default instructions
         storage.set_default_instructions(instructions)
         console.print("[green]Default instructions set successfully.[/green]")
         console.print("[dim]New agents will receive these instructions upon registration.[/dim]")
         return
 
-    # Args provided - check if it's a flag
-    if args[0].startswith('--'):
-        console.print(f"[red]Unknown flag: {args[0]}[/red]")
-        console.print("[dim]Usage: default_instructions [text|--show|--clear][/dim]")
+    # No args - show usage
+    if not args:
+        console.print("[red]Usage: default_instructions <text|--edit|--show|--clear>[/red]")
+        console.print("[dim]Examples:[/dim]")
+        console.print("[dim]  default_instructions Some text         # Inline text[/dim]")
+        console.print("[dim]  default_instructions 'Line 1\\nLine 2' # Multi-line with \\n escapes[/dim]")
+        console.print("[dim]  default_instructions --edit           # Interactive multi-line editor[/dim]")
+        console.print("[dim]  default_instructions --show           # View current default[/dim]")
+        console.print("[dim]  default_instructions --clear          # Reset to default[/dim]")
         return
 
-    # Set new default instructions from args
+    # Args provided - check if it's an unknown flag
+    if args[0].startswith('--'):
+        console.print(f"[red]Unknown flag: {args[0]}[/red]")
+        console.print("[dim]Usage: default_instructions <text|--edit|--show|--clear>[/dim]")
+        return
+
+    # Set new default instructions from args (inline mode)
     instructions = ' '.join(args)
 
     if not instructions.strip():
@@ -753,8 +849,8 @@ def cmd_help():
         ("list", "List all registered agents"),
         ("select <agent-id>", "View detailed information about an agent (UUID or user@host)"),
         ("agent_history <agent-id>", "View instruction and result history (UUID or user@host)"),
-        ("instruct <agent-id> [text]", "Set new instructions for an agent (UUID or user@host)"),
-        ("default_instructions [text|--show|--clear]", "Set/view/clear default instructions for new agents"),
+        ("instruct <agent-id> [text|--edit]", "Set instructions (inline text or multi-line editor)"),
+        ("default_instructions [text|--edit|--show|--clear]", "Set/view/clear default instructions"),
         ("show_prelude", "Toggle display of full prelude text vs <<PRELUDE>> placeholder"),
         ("history [limit]", "View command history (optionally limit to last N commands)"),
         ("search_history <query>", "Search command history for matching commands"),
@@ -931,6 +1027,9 @@ def run_cli(flask_bindings=None):
 
     global console
 
+    # Container for app reference (allows nested functions to access it before it's created)
+    app_container = {'app': None}
+
     # Clear terminal before starting TUI to remove Flask startup messages
     os.system('clear' if os.name == 'posix' else 'cls')
 
@@ -953,7 +1052,7 @@ def run_cli(flask_bindings=None):
     shell_pane.add_content("")  # Add blank line
 
     # Command definitions
-    def execute_command(user_input):
+    def execute_command(user_input, app_instance):
         """Execute a command and return output, success status."""
         global console
 
@@ -970,8 +1069,8 @@ def run_cli(flask_bindings=None):
             'agent_history': cmd_agent_history,
             'history': cmd_history,
             'search_history': cmd_search_history,
-            'instruct': cmd_instruct,
-            'default_instructions': cmd_default_instructions,
+            'instruct': lambda args: cmd_instruct(args, app_instance),
+            'default_instructions': lambda args: cmd_default_instructions(args, app_instance),
             'show_prelude': cmd_show_prelude,
             'clear': lambda args: None,  # Handled specially
             'help': lambda args: cmd_help(),
@@ -1130,7 +1229,7 @@ def run_cli(flask_bindings=None):
 
         if user_input.strip():
             # Execute command
-            output, success = execute_command(user_input)
+            output, success = execute_command(user_input, app_container['app'])
 
             # Add command and output to shell pane
             shell_pane.add_content(f"\nc2> {user_input}\n")
@@ -1190,6 +1289,9 @@ def run_cli(flask_bindings=None):
         style=style,
         enable_page_navigation_bindings=False  # Prevent conflicts with our PageUp/Down bindings
     )
+
+    # Store app in container so nested functions can access it
+    app_container['app'] = app
 
     # Start notification refresh background thread
     refresh_thread = threading.Thread(
