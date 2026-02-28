@@ -31,6 +31,12 @@ Let's break down the malicious intent in that addition:
 
 This demonstrates the approaches an attacker may take to attempt to manipulate an agent into performing an extra, malicious action.
 
+### Testing Results
+
+We tested this prompt injection against a variety of agent frameworks. Almost all of them noticed this attempt at prompt injection. Many of them even directly warned the user that there was a prompt injection attack against them. The results did vary somewhat by model. Smaller, simpler models were less likely to notice the attempt and more likely to execute the malicious instructions. 
+
+Interestingly, our results diverged when we turned the Thinking feature off of the same agents. When Thinking was enabled, many noticed the attempt at a prompt injection and warned the user. But when Thinking was turned off, those same agents were far less likely to notice or never noticed in repeated tests. While we have not performed thorough enough testing for systematic analysis, our anecdotal results suggest that this technique is far more likely to be noticed by Thinking models that are taking their context into greater consideration. 
+
 ## Via Scripts
 
 After testing the injection above, you may realize a problem (from the attacker's perspective). The agent may warn the user or ask permission to run commands that would send the data to the attacker-controlled server. This is a detection risk, since the user may realize that this is suspicious behavior. Additionally, the simplicity of our prompt may result in the agent deciding that this is a prompt injection attempt and refusing to follow our extra instructions.
