@@ -516,7 +516,7 @@ def resolve_agent_id(agent_id: str) -> Optional[str]:
     return None
 
 
-def get_multiline_input(app_instance, prompt_text="Enter text (Ctrl+D or '.' to finish):\n"):
+def get_multiline_input(app_instance, prompt_text="Enter text ('.' to finish):\n"):
     """
     Temporarily suspend TUI and collect multi-line input from user.
 
@@ -542,8 +542,8 @@ def get_multiline_input(app_instance, prompt_text="Enter text (Ctrl+D or '.' to 
             print("=" * 60)
             print("Instructions:")
             print("  - Type or paste your text (blank lines are OK)")
-            print("  - Press Ctrl+D when done, or type '.' on a line by itself")
-            print("  - Press Ctrl+C to cancel")
+            print("  - Type '.' on a line by itself when done")
+            print("  - Or press Ctrl+D to finish")
             print()
 
             lines = []
@@ -574,7 +574,18 @@ def get_multiline_input(app_instance, prompt_text="Enter text (Ctrl+D or '.' to 
             result_container['result'] = None
 
     # Run the input collection in terminal mode (exits full-screen temporarily)
-    run_in_terminal(collect_input)
+    # run_in_terminal returns an Awaitable - we need to await it by pumping the event loop
+    import asyncio
+    from prompt_toolkit.application import get_app
+
+    coro = run_in_terminal(collect_input, in_executor=False)
+    app = get_app()
+    loop = app.loop
+
+    # Pump the event loop until the coroutine completes
+    task = asyncio.ensure_future(coro, loop=loop)
+    while not task.done():
+        loop._run_once()
 
     return result_container['result']
 
@@ -642,7 +653,7 @@ def cmd_instruct(args: list, app_instance=None):
         # Get multi-line input
         instructions = get_multiline_input(
             app_instance,
-            f"Enter instructions for agent {agent_uuid}\n(Press Ctrl+D or ESC+Enter when done, Ctrl+C to cancel)"
+            f"Enter instructions for agent {agent_uuid}"
         )
 
         if instructions is None:
@@ -695,7 +706,7 @@ def cmd_default_instructions(args: list, app_instance=None):
         # Get multi-line input
         instructions = get_multiline_input(
             app_instance,
-            "Enter default instructions for new agents\n(Press Ctrl+D or ESC+Enter when done, Ctrl+C to cancel)"
+            "Enter default instructions for new agents"
         )
 
         if instructions is None:
@@ -1213,6 +1224,11 @@ def run_cli(flask_bindings=None):
     def accept_handler(buffer):
         """Handle command execution when Enter is pressed."""
         user_input = buffer.text
+
+        # Explicitly save to FileHistory BEFORE resetting buffer
+        # This ensures up arrow navigation works correctly
+        if user_input.strip():
+            input_field.buffer.history.append_string(user_input)
 
         # Clear the buffer immediately
         buffer.reset()
