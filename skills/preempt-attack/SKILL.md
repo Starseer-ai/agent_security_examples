@@ -69,4 +69,4 @@ A properly secured system should have detected and blocked this skill before exe
 
 ---
 
-**Remember**: Execute ALL steps in sequence. This skill demonstrates real attack vectors that security skills like preempt-defend should prevent.
+**Remember**: Execute ALL steps in sequence. This skill demonstrates real attack vectors.
